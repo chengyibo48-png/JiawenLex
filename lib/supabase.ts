@@ -50,6 +50,13 @@ export async function saveRow(client: SupabaseClient | null, table: string, row:
     await apiFetch(client, "/api/shares/revoke", { method: "POST", body: JSON.stringify({ id: row.id }) });
     return;
   }
+  // These records are append-only for members. An UPDATE-first upsert would need
+  // privileges the app intentionally does not grant for these tables.
+  if (["practice_attempts", "share_grants", "share_comments"].includes(table)) {
+    const { error } = await client.from(table).insert(row);
+    if (error) throw error;
+    return;
+  }
   const { data, error } = await client.from(table).update(row).eq("id", row.id).select("id");
   if (error) throw error;
   if (data?.length) return;

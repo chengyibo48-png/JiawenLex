@@ -12,10 +12,10 @@ importers:
         specifier: ^3.1141.0
         version: 3.1141.0
       '@supabase/ssr':
-        specifier: latest
+        specifier: 0.12.7
         version: 0.12.7(@supabase/supabase-js@2.117.2)
       '@supabase/supabase-js':
-        specifier: latest
+        specifier: 2.117.2
         version: 2.117.2
       lucide-react:
         specifier: latest

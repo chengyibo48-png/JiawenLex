@@ -6,10 +6,18 @@ const Input = z.object({ materialId: z.string().uuid(), body: z.string().max(100
 
 export async function PUT(request: Request) {
   try {
-    const { userId, admin } = await requireUser(request);
+    const { userId, profile, admin } = await requireUser(request);
     const { materialId, body, version } = Input.parse(await request.json());
-    const { data: material } = await admin.from("materials").select("id, owner_id, skill").eq("id", materialId).single();
-    if (!material || material.owner_id !== userId || material.skill !== "writing") throw new HttpError(403, "Writing material unavailable");
+    const { data: material, error: materialError } = await admin.from("materials").select("id,owner_id,skill,visibility,approval").eq("id", materialId).maybeSingle();
+    if (materialError) throw materialError;
+    if (!material || material.skill !== "writing") throw new HttpError(403, "Writing material unavailable");
+    let canPractice = material.owner_id === userId || (material.visibility === "shared" && (material.approval === "approved" || profile.role === "admin"));
+    if (!canPractice) {
+      const { data: grant, error: grantError } = await admin.from("share_grants").select("id").eq("target_type", "material").eq("target_id", materialId).eq("recipient_id", userId).is("revoked_at", null).limit(1).maybeSingle();
+      if (grantError) throw grantError;
+      canPractice = !!grant;
+    }
+    if (!canPractice) throw new HttpError(403, "Writing material unavailable");
     const { data: existing, error: readError } = await admin.from("writing_drafts").select("*").eq("owner_id", userId).eq("material_id", materialId).maybeSingle();
     if (readError) throw readError;
     if (existing && existing.version !== version) return NextResponse.json({ error: "draft_conflict", serverDraft: existing }, { status: 409 });

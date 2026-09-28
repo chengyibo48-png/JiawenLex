@@ -5,6 +5,7 @@ node_modules-copied
 .env.local
 .env.*.local
 .vercel
+supabase/.temp/
 *.tsbuildinfo
 *.log
 backups

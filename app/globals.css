@@ -5,7 +5,7 @@
   --surface-soft: #f8faf7;
   --sidebar: #f9faf7;
   --ink: #21342f;
-  --muted: #697b75;
+  --muted: #5b6d67;
   --border: #e2e9e3;
   --primary: #16695e;
   --primary-strong: #0d5148;
@@ -352,7 +352,7 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
 .auth-card form { display: grid; gap: 17px; width: 100%; }
 .auth-card form .button { margin-top: 9px; }
 .auth-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
-.auth-tabs button { padding: 0 0 12px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: .82rem; font-weight: 800; }
+.auth-tabs button { min-height: 44px; padding: 0 0 12px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font-size: .82rem; font-weight: 800; }
 .auth-tabs button.active { color: var(--primary); border-color: var(--primary); }
 .auth-card .text-link { align-self: flex-start; margin-top: 15px; }
 .form-message { background: var(--primary-soft); color: var(--primary-strong); border-radius: 8px; padding: 10px; margin: 14px 0 0; font-size: .79rem; }

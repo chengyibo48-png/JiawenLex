@@ -2,7 +2,7 @@
 create extension if not exists pgcrypto;
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
-grant usage on schema private to service_role;
+grant usage on schema private to authenticated, service_role;
 
 create table public.invite_control (
   id integer primary key default 1 check (id = 1),
@@ -39,11 +39,11 @@ create table public.profiles (
   updated_at timestamptz not null default now()
 );
 
-create or replace function public.is_active_member()
+create or replace function private.is_active_member()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists (select 1 from public.profiles where id = auth.uid() and status = 'active') $$;
 
-create or replace function public.is_group_admin()
+create or replace function private.is_group_admin()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists (select 1 from public.profiles where id = auth.uid() and status = 'active' and role = 'admin') $$;
 
@@ -52,7 +52,7 @@ returns table(id uuid, display_name text)
 language plpgsql stable security definer set search_path = public
 as $$
 begin
-  if not public.is_active_member() then
+  if not private.is_active_member() then
     raise exception 'inactive account';
   end if;
   return query select p.id, p.display_name from public.profiles p where p.status = 'active' order by p.created_at;
@@ -85,7 +85,28 @@ $$;
 revoke all on function public.jiawenlex_before_user_created(jsonb) from public, anon, authenticated;
 grant execute on function public.jiawenlex_before_user_created(jsonb) to supabase_auth_admin;
 
-create or replace function public.jiawenlex_profile_insert()
+-- Enforce invitations inside the user INSERT transaction as well. This protects
+-- registration even before the optional Auth Hook is enabled in the dashboard,
+-- and serializes the account-limit check with the actual user creation.
+create or replace function private.enforce_invitation()
+returns trigger language plpgsql security definer set search_path = public, auth
+as $$
+declare
+  verdict jsonb;
+begin
+  verdict := public.jiawenlex_before_user_created(
+    jsonb_build_object('user', jsonb_build_object('user_metadata', coalesce(new.raw_user_meta_data, '{}'::jsonb)))
+  );
+  if verdict ? 'error' then
+    raise exception '%', verdict->'error'->>'message';
+  end if;
+  return new;
+end;
+$$;
+create trigger jiawenlex_enforce_invitation before insert on auth.users
+for each row execute function private.enforce_invitation();
+
+create or replace function private.jiawenlex_profile_insert()
 returns trigger language plpgsql security definer set search_path = public, auth
 as $$
 begin
@@ -100,9 +121,9 @@ begin
 end;
 $$;
 create trigger jiawenlex_new_user after insert on auth.users
-for each row execute function public.jiawenlex_profile_insert();
+for each row execute function private.jiawenlex_profile_insert();
 
-create or replace function public.protect_profile_admin_fields()
+create or replace function private.protect_profile_admin_fields()
 returns trigger language plpgsql set search_path = public
 as $$
 begin
@@ -114,7 +135,7 @@ begin
 end;
 $$;
 create trigger protect_profile before update on public.profiles
-for each row execute function public.protect_profile_admin_fields();
+for each row execute function private.protect_profile_admin_fields();
 
 create table public.study_tasks (
   id uuid primary key default gen_random_uuid(),
@@ -211,6 +232,7 @@ create table public.share_grants (
 );
 create index share_grants_target on public.share_grants(target_type, target_id);
 create index share_grants_recipient on public.share_grants(recipient_id, revoked_at);
+create index share_grants_owner on public.share_grants(owner_id);
 
 create table public.share_comments (
   id uuid primary key default gen_random_uuid(),
@@ -219,6 +241,8 @@ create table public.share_comments (
   body text not null check (char_length(body) between 1 and 2000),
   created_at timestamptz not null default now()
 );
+create index share_comments_share_time on public.share_comments(share_id, created_at);
+create index share_comments_author on public.share_comments(author_id);
 
 create table public.ai_usage (
   id uuid primary key default gen_random_uuid(),
@@ -284,7 +308,7 @@ alter table public.deletion_events enable row level security;
 revoke all on public.deletion_events from public, anon, authenticated;
 grant all on public.deletion_events to service_role;
 
-create or replace function public.owns_share_target(kind text, item_id uuid)
+create or replace function private.owns_share_target(kind text, item_id uuid)
 returns boolean language sql stable security definer set search_path = public
 as $$
   select case
@@ -294,20 +318,30 @@ as $$
   end
 $$;
 
-create or replace function public.can_read_share(grant_id uuid)
+-- A recipient lookup must bypass the self-only profile policy, without exposing
+-- another member's private profile or permitting inactive users to make shares.
+create or replace function private.is_active_recipient(member_id uuid)
 returns boolean language sql stable security definer set search_path = public
 as $$
-  select public.is_active_member() and exists (
+  select private.is_active_member() and exists (
+    select 1 from public.profiles where id = member_id and status = 'active'
+  )
+$$;
+
+create or replace function private.can_read_share(grant_id uuid)
+returns boolean language sql stable security definer set search_path = public
+as $$
+  select private.is_active_member() and exists (
     select 1 from public.share_grants
     where id = grant_id and revoked_at is null and (owner_id = auth.uid() or recipient_id = auth.uid())
   )
 $$;
 
-create or replace function public.protect_material_approval()
+create or replace function private.protect_material_approval()
 returns trigger language plpgsql set search_path = public
 as $$
 begin
-  if new.visibility = 'shared' and (tg_op = 'INSERT' or old.approval <> new.approval) and not public.is_group_admin() then
+  if new.visibility = 'shared' and (tg_op = 'INSERT' or old.approval <> new.approval) and not private.is_group_admin() then
     if new.approval <> 'pending' then raise exception 'Shared material needs approval'; end if;
   end if;
   if new.visibility = 'shared' and (trim(new.source_title) = '' or trim(new.license_name) = '') then
@@ -317,16 +351,16 @@ begin
 end;
 $$;
 create trigger protect_material before insert or update on public.materials
-for each row execute function public.protect_material_approval();
+for each row execute function private.protect_material_approval();
 
-create or replace function public.protect_material_identity()
+create or replace function private.protect_material_identity()
 returns trigger language plpgsql set search_path = public
 as $$
 begin
   if auth.uid() is not null and (new.owner_id <> old.owner_id or new.id <> old.id) then
     raise exception 'Cannot change material ownership';
   end if;
-  if auth.uid() is not null and public.is_group_admin() and new.owner_id <> auth.uid() and
+  if auth.uid() is not null and private.is_group_admin() and new.owner_id <> auth.uid() and
      (new.title, new.skill, new.track, new.question_type, new.prompt, new.passage,
       new.transcript, new.questions, new.tags, new.source_title, new.source_url,
       new.license_name, new.file_path, new.file_name, new.file_kind, new.visibility)
@@ -336,16 +370,16 @@ begin
       old.license_name, old.file_path, old.file_name, old.file_kind, old.visibility) then
     raise exception 'Admin may only review shared material';
   end if;
-  if auth.uid() is not null and not public.is_group_admin() and old.approval = 'approved' and new.visibility = 'shared' then
+  if auth.uid() is not null and not private.is_group_admin() and old.approval = 'approved' and new.visibility = 'shared' then
     new.approval := 'pending';
   end if;
   return new;
 end;
 $$;
 create trigger protect_material_identity before update on public.materials
-for each row execute function public.protect_material_identity();
+for each row execute function private.protect_material_identity();
 
-create or replace function public.protect_share_identity()
+create or replace function private.protect_share_identity()
 returns trigger language plpgsql set search_path = public
 as $$
 begin
@@ -360,7 +394,7 @@ begin
 end;
 $$;
 create trigger protect_share before update on public.share_grants
-for each row execute function public.protect_share_identity();
+for each row execute function private.protect_share_identity();
 
 alter table public.profiles enable row level security;
 alter table public.study_tasks enable row level security;
@@ -372,55 +406,55 @@ alter table public.share_grants enable row level security;
 alter table public.share_comments enable row level security;
 alter table public.ai_usage enable row level security;
 
-create policy profiles_self_read on public.profiles for select to authenticated using (id = auth.uid() and public.is_active_member());
-create policy profiles_self_update on public.profiles for update to authenticated using (id = auth.uid() and public.is_active_member()) with check (id = auth.uid() and public.is_active_member());
+create policy profiles_self_read on public.profiles for select to authenticated using (id = auth.uid() and private.is_active_member());
+create policy profiles_self_update on public.profiles for update to authenticated using (id = auth.uid() and private.is_active_member()) with check (id = auth.uid() and private.is_active_member());
 
-create policy tasks_self_all on public.study_tasks for all to authenticated using (owner_id = auth.uid() and public.is_active_member()) with check (owner_id = auth.uid() and public.is_active_member());
-create policy vocab_self_read on public.vocabulary for select to authenticated using (owner_id = auth.uid() and public.is_active_member());
-create policy vocab_self_insert on public.vocabulary for insert to authenticated with check (owner_id = auth.uid() and public.is_active_member());
-create policy vocab_self_update on public.vocabulary for update to authenticated using (owner_id = auth.uid() and public.is_active_member()) with check (owner_id = auth.uid() and public.is_active_member());
-create policy drafts_self_read on public.writing_drafts for select to authenticated using (owner_id = auth.uid() and public.is_active_member());
+create policy tasks_self_all on public.study_tasks for all to authenticated using (owner_id = auth.uid() and private.is_active_member()) with check (owner_id = auth.uid() and private.is_active_member());
+create policy vocab_self_read on public.vocabulary for select to authenticated using (owner_id = auth.uid() and private.is_active_member());
+create policy vocab_self_insert on public.vocabulary for insert to authenticated with check (owner_id = auth.uid() and private.is_active_member());
+create policy vocab_self_update on public.vocabulary for update to authenticated using (owner_id = auth.uid() and private.is_active_member()) with check (owner_id = auth.uid() and private.is_active_member());
+create policy drafts_self_read on public.writing_drafts for select to authenticated using (owner_id = auth.uid() and private.is_active_member());
 
 create policy materials_read on public.materials for select to authenticated using (
-  public.is_active_member() and (
+  private.is_active_member() and (
     owner_id = auth.uid() or (visibility = 'shared' and approval = 'approved')
-    or (public.is_group_admin() and visibility = 'shared')
+    or (private.is_group_admin() and visibility = 'shared')
     or exists (select 1 from public.share_grants g where g.target_type = 'material' and g.target_id = materials.id and g.recipient_id = auth.uid() and g.revoked_at is null)
   )
 );
-create policy materials_insert on public.materials for insert to authenticated with check (owner_id = auth.uid() and public.is_active_member());
-create policy materials_update on public.materials for update to authenticated using (public.is_active_member() and (owner_id = auth.uid() or (public.is_group_admin() and visibility = 'shared'))) with check (public.is_active_member() and (owner_id = auth.uid() or (public.is_group_admin() and visibility = 'shared')));
+create policy materials_insert on public.materials for insert to authenticated with check (owner_id = auth.uid() and private.is_active_member());
+create policy materials_update on public.materials for update to authenticated using (private.is_active_member() and (owner_id = auth.uid() or (private.is_group_admin() and visibility = 'shared'))) with check (private.is_active_member() and (owner_id = auth.uid() or (private.is_group_admin() and visibility = 'shared')));
 
 create policy attempts_read on public.practice_attempts for select to authenticated using (
-  public.is_active_member() and (
+  private.is_active_member() and (
     owner_id = auth.uid()
     or exists (select 1 from public.share_grants g where g.target_type = 'attempt' and g.target_id = practice_attempts.id and g.recipient_id = auth.uid() and g.revoked_at is null)
   )
 );
-create policy attempts_insert on public.practice_attempts for insert to authenticated with check (owner_id = auth.uid() and public.is_active_member());
+create policy attempts_insert on public.practice_attempts for insert to authenticated with check (owner_id = auth.uid() and private.is_active_member());
 
-create policy shares_read on public.share_grants for select to authenticated using (public.is_active_member() and (owner_id = auth.uid() or recipient_id = auth.uid()));
+create policy shares_read on public.share_grants for select to authenticated using (private.is_active_member() and (owner_id = auth.uid() or recipient_id = auth.uid()));
 create policy shares_insert on public.share_grants for insert to authenticated with check (
-  owner_id = auth.uid() and public.is_active_member() and public.owns_share_target(target_type, target_id)
-  and exists (select 1 from public.profiles p where p.id = recipient_id and p.status = 'active')
+  owner_id = auth.uid() and private.is_active_member() and private.owns_share_target(target_type, target_id)
+  and private.is_active_recipient(recipient_id)
 );
-create policy comments_read on public.share_comments for select to authenticated using (public.can_read_share(share_id));
-create policy comments_insert on public.share_comments for insert to authenticated with check (author_id = auth.uid() and public.can_read_share(share_id));
-create policy comments_delete on public.share_comments for delete to authenticated using (author_id = auth.uid() and public.can_read_share(share_id));
-create policy usage_self_read on public.ai_usage for select to authenticated using (owner_id = auth.uid() and public.is_active_member());
+create policy comments_read on public.share_comments for select to authenticated using (private.can_read_share(share_id));
+create policy comments_insert on public.share_comments for insert to authenticated with check (author_id = auth.uid() and private.can_read_share(share_id));
+create policy comments_delete on public.share_comments for delete to authenticated using (author_id = auth.uid() and private.can_read_share(share_id));
+create policy usage_self_read on public.ai_usage for select to authenticated using (owner_id = auth.uid() and private.is_active_member());
 
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('study-files', 'study-files', false, 26214400), ('study-audio', 'study-audio', false, 26214400)
 on conflict (id) do nothing;
 
 create policy own_files_upload on storage.objects for insert to authenticated
-with check (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and public.is_active_member());
+with check (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and private.is_active_member());
 create policy own_files_read on storage.objects for select to authenticated
-using (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and public.is_active_member());
+using (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and private.is_active_member());
 create policy own_files_delete on storage.objects for delete to authenticated
-using (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and public.is_active_member());
+using (bucket_id in ('study-files','study-audio') and split_part(name, '/', 1) = auth.uid()::text and private.is_active_member());
 
-create or replace function public.log_deleted_attempt()
+create or replace function private.log_deleted_attempt()
 returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
@@ -429,9 +463,9 @@ begin
 end;
 $$;
 create trigger log_deleted_attempt after delete on public.practice_attempts
-for each row execute function public.log_deleted_attempt();
+for each row execute function private.log_deleted_attempt();
 
-create or replace function public.log_deleted_material()
+create or replace function private.log_deleted_material()
 returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
@@ -440,4 +474,38 @@ begin
 end;
 $$;
 create trigger log_deleted_material after delete on public.materials
-for each row execute function public.log_deleted_material();
+for each row execute function private.log_deleted_material();
+
+-- New Supabase projects require explicit Data API grants. RLS remains responsible
+-- for deciding which rows each member can read or change.
+revoke all on public.profiles, public.study_tasks, public.materials,
+  public.practice_attempts, public.vocabulary, public.writing_drafts,
+  public.share_grants, public.share_comments, public.ai_usage
+  from public, anon, authenticated;
+grant usage on schema public to authenticated, service_role, supabase_auth_admin;
+grant select, update on public.profiles to authenticated;
+grant select, insert, update, delete on public.study_tasks to authenticated;
+grant select, insert, update on public.materials, public.vocabulary to authenticated;
+grant select, insert on public.practice_attempts, public.share_grants to authenticated;
+grant select, insert, delete on public.share_comments to authenticated;
+grant select on public.writing_drafts, public.ai_usage to authenticated;
+grant select, insert, update, delete on public.profiles, public.study_tasks,
+  public.materials, public.practice_attempts, public.vocabulary,
+  public.writing_drafts, public.share_grants, public.share_comments, public.ai_usage,
+  public.invite_control, public.provider_keys, public.transcription_jobs,
+  public.reminder_deliveries, public.deletion_events to service_role;
+grant usage, select on sequence public.deletion_events_id_seq to service_role;
+
+-- Internal helpers live outside the exposed public schema. Only the helpers used
+-- by member policies are executable by members; trigger functions stay private.
+revoke all on all functions in schema private from public, anon, authenticated;
+grant execute on function private.is_active_member(), private.is_group_admin(),
+  private.owns_share_target(text, uuid), private.can_read_share(uuid),
+  private.is_active_recipient(uuid) to authenticated, service_role;
+grant execute on function public.list_members() to service_role;
+
+create index study_tasks_owner_date on public.study_tasks(owner_id, planned_date);
+create index study_tasks_material on public.study_tasks(material_id);
+create index materials_owner_time on public.materials(owner_id, created_at desc);
+create index practice_attempts_material on public.practice_attempts(material_id);
+create index writing_drafts_material on public.writing_drafts(material_id);
