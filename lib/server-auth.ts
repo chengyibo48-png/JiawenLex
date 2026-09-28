@@ -23,10 +23,9 @@ export async function requireUser(request: Request): Promise<{ userId: string; s
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) throw new Error("Invalid session");
   } catch { throw new HttpError(401, "Session expired"); }
   const { data: active, error: sessionError } = await admin.rpc("session_active", { member_id: auth.user.id, session_id: sessionId });
-  // During the reviewed migration's staged rollout, preserve the existing Auth +
-  // active-profile checks. Immediate JWT revocation becomes active once the RPC exists.
-  if (sessionError && sessionError.code !== "PGRST202") throw sessionError;
-  if (!sessionError && !active) throw new HttpError(401, "Session expired");
+  // The required migration is installed: unavailable checks must fail closed.
+  if (sessionError) throw new HttpError(503, "Session verification unavailable. Please retry.");
+  if (!active) throw new HttpError(401, "Session expired");
   const { data: profile, error } = await admin.from("profiles").select("*").eq("id", auth.user.id).single();
   if (error || !profile || profile.status !== "active") throw new HttpError(403, "Account is inactive");
   return { userId: auth.user.id, sessionId, email: auth.user.email ?? "", profile: profile as Profile, admin };

@@ -29,8 +29,8 @@ export function parseFileToken(token: string): { userId: string; materialId: str
 export async function accessibleMaterial(userId: string, materialId: string, sessionId: string) {
   const admin = getAdminClient();
   const { data: active, error } = await admin.rpc("session_active", { member_id: userId, session_id: sessionId });
-  if (error && error.code !== "PGRST202") throw error;
-  if (!error && !active) throw new HttpError(401, "Session expired");
+  if (error) throw new HttpError(503, "Session verification unavailable. Please retry.");
+  if (!active) throw new HttpError(401, "Session expired");
   const [{ data: profile }, { data: material }] = await Promise.all([
     admin.from("profiles").select("role,status").eq("id", userId).maybeSingle(),
     admin.from("materials").select("id,owner_id,visibility,approval,file_path,file_kind").eq("id", materialId).maybeSingle(),

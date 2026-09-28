@@ -158,12 +158,12 @@ export function useWritingDraft(options: Options) {
       setCopies(await conflictCopies(options.userId, ctx.materialId));
     } catch { showStatus(ctx, "error"); }
   }
-  async function canLeave(message: string, failureMessage: string) {
+  async function canLeave(message: string, failureMessage: string, ask = true) {
     const ctx = context.current;
     if (!ctx?.dirty) return true;
     try { await ctx.localWrite; }
     catch { return window.confirm(failureMessage); }
-    return window.confirm(message);
+    return !ctx.dirty || !ask || window.confirm(message);
   }
   return { body, edit, status, ready, conflict, copies, useCloud, canLeave };
 }

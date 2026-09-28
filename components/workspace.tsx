@@ -1,6 +1,5 @@
 "use client";
 
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import {
@@ -14,6 +13,7 @@ import { clearLocalDraft, localDraftIds } from "@/lib/offline-drafts";
 import { syncPendingDrafts } from "@/lib/draft-sync";
 import { dueWords, localDate, startOfWeek } from "@/lib/study";
 import { PracticeView } from "./practice-view";
+import { Modal } from "./modal";
 import { AdminView, LibraryView, PlanView, ProgressView, SettingsView, TodayView, VocabularyView, type ViewActions } from "./views";
 
 const nav: { id: View; zh: string; en: string; icon: typeof House }[] = [
@@ -41,11 +41,13 @@ export function Workspace() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resetFlow, setResetFlow] = useState(false);
   const [practiceSkill, setPracticeSkill] = useState<Skill>("reading");
-  const leavePractice = useRef<(() => Promise<boolean>) | null>(null);
+  const leavePractice = useRef<((reason?: "navigate" | "logout") => Promise<boolean>) | null>(null);
   const activeDraftMaterial = useRef<string | null>(null);
   const [logoutScope, setLogoutScope] = useState<"local" | "global" | null>(null);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const refreshBusy = useRef(false);
+  const logoutChecking = useRef(false);
+  const logoutSubmitting = useRef(false);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -202,13 +204,20 @@ export function Workspace() {
   const currentView = nav.find((item) => item.id === view);
 
   async function logout(scope: "local" | "global" = "local") {
+    if (logoutChecking.current || logoutSubmitting.current || logoutScope) return;
+    logoutChecking.current = true;
+    setLogoutBusy(true);
     try {
+      if (view === "practice" && leavePractice.current && !await leavePractice.current("logout")) return;
       const pending = await localDraftIds(profile.id);
       if (pending.length) { setLogoutScope(scope); return; }
       await finishLogout(scope, false);
     } catch { notify(t(lang, "无法检查本机草稿，请稍后重试。", "Could not check local drafts. Please retry.")); }
+    finally { logoutChecking.current = false; setLogoutBusy(false); }
   }
   async function finishLogout(scope: "local" | "global", discard: boolean) {
+    if (logoutSubmitting.current) return;
+    logoutSubmitting.current = true;
     setLogoutBusy(true);
     try {
       if (discard) for (const id of await localDraftIds(profile.id)) await clearLocalDraft(profile.id, id);
@@ -217,7 +226,7 @@ export function Workspace() {
       else setData(null);
       setUser(null); setLogoutScope(null);
     } catch (error) { notify(error instanceof Error ? error.message : "退出失败"); }
-    finally { setLogoutBusy(false); }
+    finally { logoutSubmitting.current = false; setLogoutBusy(false); }
   }
 
   return (
@@ -234,7 +243,7 @@ export function Workspace() {
         </nav>
         <div className="sidebar-bottom">
           <div className="goal-mini"><span className="goal-mini-icon"><Sparkles size={17} /></span><div><small>{t(lang, "目标分数", "Target band")}</small><strong>{profile.goal_overall?.toFixed(1) ?? "—"}</strong></div><ChevronRight size={17} /></div>
-          <div className="profile-chip"><span className="avatar">{profile.display_name.slice(0, 1)}</span><div><strong>{profile.display_name}</strong><small>{profile.track === "academic" ? "Academic" : "General Training"}</small></div><button title={t(lang, "退出", "Sign out")} onClick={() => void logout()}><LogOut size={18} /></button></div>
+          <div className="profile-chip"><span className="avatar">{profile.display_name.slice(0, 1)}</span><div><strong>{profile.display_name}</strong><small>{profile.track === "academic" ? "Academic" : "General Training"}</small></div><button disabled={logoutBusy || !!logoutScope} title={t(lang, "退出", "Sign out")} onClick={() => void logout()}><LogOut size={18} /></button></div>
         </div>
       </aside>
       <div className="main-column">
@@ -242,8 +251,8 @@ export function Workspace() {
           <div className="topbar-title"><span className="eyebrow">{t(lang, "你的工作台", "YOUR WORKSPACE")}</span><h1>{view === "admin" ? t(lang, "管理", "Admin") : t(lang, currentView?.zh ?? "今日", currentView?.en ?? "Today")}</h1></div>
           <div className="topbar-actions">
             {demoMode && <span className="demo-pill">{t(lang, "本机演示", "Local demo")}</span>}
-            <button className="icon-button" title={t(lang, "切换语言", "Switch language")} onClick={() => void updateProfile({ ...profile, language: lang === "zh" ? "en" : "zh" })}><span className="lang-button">{lang === "zh" ? "EN" : "中"}</span></button>
-            <button className="icon-button" title={t(lang, "切换主题", "Switch theme")} onClick={() => void updateProfile({ ...profile, theme: profile.theme === "light" ? "dark" : "light" })}>{profile.theme === "light" ? <Moon size={19} /> : <Sun size={19} />}</button>
+            <button className="icon-button" title={t(lang, "切换语言", "Switch language")} onClick={() => void updateProfile({ ...profile, language: lang === "zh" ? "en" : "zh" }).catch(() => undefined)}><span className="lang-button">{lang === "zh" ? "EN" : "中"}</span></button>
+            <button className="icon-button" title={t(lang, "切换主题", "Switch theme")} onClick={() => void updateProfile({ ...profile, theme: profile.theme === "light" ? "dark" : "light" }).catch(() => undefined)}>{profile.theme === "light" ? <Moon size={19} /> : <Sun size={19} />}</button>
           </div>
         </header>
         <main className="main-content">
@@ -265,7 +274,7 @@ export function Workspace() {
         <button className={moreOpen || ["library", "progress", "settings", "admin"].includes(view) ? "active" : ""} onClick={() => setMoreOpen(!moreOpen)}><Settings2 size={20} /><span>{t(lang, "更多", "More")}</span></button>
       </nav>
       {moreOpen && <div className="mobile-more">{nav.slice(4).concat(profile.role === "admin" ? [{ id: "admin", zh: "管理", en: "Admin", icon: ShieldCheck }] : []).map((item) => <button key={item.id} onClick={() => { navigate(item.id); setMoreOpen(false); }}>{t(lang, item.zh, item.en)}</button>)}</div>}
-      {logoutScope && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-label={t(lang, "未同步的草稿", "Unsynced drafts")}><h3>{t(lang, "本机仍有未同步草稿", "Unsynced drafts remain on this device")}</h3><p>{t(lang, "保留后，下次用同一账号登录此浏览器可恢复。清理会删除尚未同步的文字。", "Keep them to restore after signing in on this browser again. Discarding deletes unsynced text.")}</p><div className="button-row"><button className="button primary" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, false)}>{t(lang, "保留并退出", "Keep and sign out")}</button><button className="button danger-outline" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, true)}>{t(lang, "清理并退出", "Discard and sign out")}</button><button className="button secondary" disabled={logoutBusy} onClick={() => setLogoutScope(null)}>{t(lang, "取消", "Cancel")}</button></div></section></div>}
+      {logoutScope && <Modal label={t(lang, "未同步的草稿", "Unsynced drafts")} busy={logoutBusy} onClose={() => setLogoutScope(null)}><h3>{t(lang, "本机仍有未同步草稿", "Unsynced drafts remain on this device")}</h3><p>{t(lang, "保留后，下次用同一账号登录此浏览器可恢复。清理会删除尚未同步的文字。", "Keep them to restore after signing in on this browser again. Discarding deletes unsynced text.")}</p><div className="button-row"><button className="button primary" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, false)}>{t(lang, "保留并退出", "Keep and sign out")}</button><button className="button danger-outline" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, true)}>{t(lang, "清理并退出", "Discard and sign out")}</button><button className="button secondary" data-modal-initial-focus disabled={logoutBusy} onClick={() => setLogoutScope(null)}>{t(lang, "取消", "Cancel")}</button></div></Modal>}
       {toast && <div className="toast" role="status"><span>{toast}</span><button onClick={() => setToast(null)} aria-label={t(lang, "关闭", "Close")}><X size={16} /></button></div>}
     </div>
   );
