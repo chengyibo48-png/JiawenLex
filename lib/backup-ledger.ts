@@ -1,0 +1,28 @@
+import "server-only";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+
+export type Tombstone = { entity: "account" | "member_removed" | "materials" | "practice_attempts" | "vocabulary" | "share_grants" | "writing_drafts" | "purged_attempt"; entityId: string; ownerId: string; at: string };
+
+export function backupClient(): { client: S3Client; bucket: string; key: Buffer } {
+  const endpoint = process.env.BACKUP_S3_ENDPOINT;
+  const region = process.env.BACKUP_S3_REGION;
+  const bucket = process.env.BACKUP_S3_BUCKET;
+  const accessKeyId = process.env.BACKUP_S3_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.BACKUP_S3_SECRET_ACCESS_KEY;
+  const secret = process.env.BACKUP_ENCRYPTION_SECRET;
+  if (!endpoint || !region || !bucket || !accessKeyId || !secretAccessKey || !secret || secret.length < 32) throw new Error("Independent backup storage is not configured");
+  return { client: new S3Client({ endpoint, region, forcePathStyle: true, credentials: { accessKeyId, secretAccessKey } }), bucket, key: createHash("sha256").update(secret).digest() };
+}
+
+export function encryptBackupBytes(plain: Buffer, key: Buffer): Buffer {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  return Buffer.concat([Buffer.from("JLEX1"), iv, cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
+}
+
+export async function recordTombstone(event: Tombstone): Promise<void> {
+  const { client, bucket, key } = backupClient();
+  const id = randomBytes(16).toString("hex");
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: `deletions/${event.at.slice(0, 10)}/${id}.jlex`, Body: encryptBackupBytes(Buffer.from(JSON.stringify(event)), key), ContentType: "application/octet-stream" }));
+}

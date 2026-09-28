@@ -1,0 +1,11 @@
+node_modules
+node_modules-copied
+.pnpm-store
+.next
+.env.local
+.env.*.local
+.vercel
+*.tsbuildinfo
+*.log
+backups
+JiawenLex-source.zip
