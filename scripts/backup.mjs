@@ -8,6 +8,11 @@ import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, Del
 
 const mode = process.argv[2];
 const required = (name) => { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value; };
+function supabaseServerKey(prefix = "") {
+  const value = process.env[`${prefix}SUPABASE_SECRET_KEY`] || process.env[`${prefix}SUPABASE_SERVICE_ROLE_KEY`];
+  if (!value) throw new Error(`${prefix}SUPABASE_SECRET_KEY is required`);
+  return value;
+}
 const s3 = new S3Client({ endpoint: required("BACKUP_S3_ENDPOINT"), region: required("BACKUP_S3_REGION"), forcePathStyle: true, credentials: { accessKeyId: required("BACKUP_S3_ACCESS_KEY_ID"), secretAccessKey: required("BACKUP_S3_SECRET_ACCESS_KEY") } });
 const bucket = required("BACKUP_S3_BUCKET");
 const secret = required("BACKUP_ENCRYPTION_SECRET");
@@ -86,7 +91,7 @@ async function backup() {
     const dump = await readFile(dumpPath);
     const prefix = `snapshots/${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}/`;
     await put(`${prefix}database.jlex`, dump);
-    const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), required("SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false } });
+    const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), supabaseServerKey(), { auth: { persistSession: false } });
     const files = [];
     for (const bucketName of ["study-files", "study-audio"]) {
       for (const path of await storagePaths(client, bucketName)) {
@@ -153,7 +158,7 @@ async function replayDeletions() {
 }
 async function restoreFiles() {
   if (process.env.RESTORE_CONFIRM !== "fresh-recovery-project") throw new Error("Set RESTORE_CONFIRM=fresh-recovery-project only after replaying deletions in a disposable recovery project");
-  const client = createClient(required("RECOVERY_SUPABASE_URL"), required("RECOVERY_SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false } });
+  const client = createClient(required("RECOVERY_SUPABASE_URL"), supabaseServerKey("RECOVERY_"), { auth: { persistSession: false } });
   const prefix = await latestSnapshot();
   const manifest = JSON.parse((await get(`${prefix}manifest.jlex`)).toString());
   let restored = 0;
