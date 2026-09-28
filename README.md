@@ -4,7 +4,7 @@
 
 ## 本机启动
 
-需要 Node.js 22 或更新版本、pnpm 11。运行 `pnpm install`，复制 `.env.example` 为 `.env.local`。若仅看演示，把 `NEXT_PUBLIC_DEMO_MODE=true` 留着，执行 `pnpm dev` 并打开 `http://localhost:3000`。演示数据存在当前浏览器，不连接 Supabase，也不模拟真实邮件、AI 或备份。
+需要 Node.js 22.18 或更新版本（建议 Node.js 24）、pnpm 11。运行 `pnpm install`，复制 `.env.example` 为 `.env.local`。若仅看演示，把 `NEXT_PUBLIC_DEMO_MODE=true` 留着，执行 `pnpm dev` 并打开 `http://localhost:3000`。演示数据存在当前浏览器，不连接 Supabase，也不模拟真实邮件、AI 或备份。
 
 本机通过代理访问 Supabase 时，在 `.env.local` 填写 `HTTPS_PROXY`、`HTTP_PROXY`（例如 `http://127.0.0.1:7892`，端口以自己的代理为准），使用 Node.js 24 或更新版本。`pnpm dev` 会在启动 Next.js 前启用 Node 的环境代理；浏览器仍使用自己的网络设置。海外部署通常留空这两项。
 
@@ -16,7 +16,7 @@
 
 本轮还补齐可定位原文的写作批注、手机批注面板、弹窗键盘焦点、未提交作答的离开确认及设置编辑保护。保存 AI 偏好只更新开关和预算，不会顺带保存尚未确认的备考目标。
 
-本轮修复清单及验证范围见 [v1 检查记录](docs/v1-review-2026-09-29.md)。
+本轮修复清单及验证范围见 [v1 检查记录](docs/v1-review-2026-09-29.md)。新建账号、部署与备份的逐步操作见 [服务配置指南](docs/service-setup.md)。管理员页面新增服务配置状态；终端可运行 `pnpm services:check`，加 `--connect` 可只验证连接，不发送邮件或调用 AI。
 
 ## 建立正式环境
 
@@ -60,16 +60,18 @@ Supabase 顾问可能显示 `RLS Enabled No Policy`：邀请码、加密密钥�
 
 ## 备份、验证与恢复演练
 
-备份工作机需安装 PostgreSQL 客户端（`pg_dump`、`pg_restore`、`psql`），以及 Node.js 22。设置环境变量后运行：
+备份工作机使用 PostgreSQL 17 客户端（pg_dump、pg_restore、psql）和 Node.js 22.18+。本机命令通过包装器加载被忽略的 .env.local 和代理设置：
 
 ```text
-node scripts/backup.mjs backup
-node scripts/backup.mjs verify
+pnpm backup backup
+pnpm backup verify
 ```
 
-`backup` 上传加密的 PostgreSQL custom dump、两个私有 bucket 的文件和清单；最后上传清单作为完整快照标记。`verify` 下载并解密最近快照，逐个校验 SHA-256，检查数据库 dump 能被 `pg_restore` 读取。这是完整性验证，仍需要真实恢复演练。
+backup 上传 AES-256-GCM 加密的数据库 dump、私有文件和版本 2 清单，然后下载、解密、校验长度/SHA-256 和 pg_restore 可读性。最后写入 verified 标记，再清理至最近 4 份已验证快照。校验失败不会淘汰旧快照；旧版快照须指定 SNAPSHOT_PREFIX 执行 verify。备份排除平台 cron/net/Vault 和 Auth 会话数据。
 
-每月在**全新的、可丢弃的恢复项目**中：先按 Supabase 的数据库恢复流程恢复最近的数据库快照；设置 `RECOVERY_DATABASE_URL` 和 `RESTORE_CONFIRM=fresh-recovery-project` 后运行 `node scripts/backup.mjs replay-deletions`；再设置 `RECOVERY_SUPABASE_URL`、`RECOVERY_SUPABASE_SECRET_KEY`（也兼容旧的 `RECOVERY_SUPABASE_SERVICE_ROLE_KEY`）并运行 `node scripts/backup.mjs restore-files`。恢复工具只上传数据库里仍被资料或未过期练习引用的文件。逐项核对已注销账号、已移除成员、撤销的分享、删除的资料/练习和满一年清除的原文及录音。不要把恢复项目公开。恢复成功后销毁该环境。
+每月在**不同的、可丢弃的恢复项目**中，按当前仓库全部迁移建立空表和权限，设置固定 SNAPSHOT_PREFIX、RECOVERY_DATABASE_URL、RECOVERY_SUPABASE_URL、RECOVERY_SUPABASE_SECRET_KEY 和 RESTORE_CONFIRM=fresh-recovery-project。执行 pnpm backup restore-database，只导入白名单中的应用表、Auth users/identities 数据，并自动重放独立删除记录；随后 pnpm backup restore-files 恢复仍被授权资料/有效录音引用的文件。目标数据库有成员或学习记录时拒绝导入；旧会话不恢复；已过期原文清除，摘要保留。迁移必须与备份表结构相容。导入或权限检查有错误时不能算演练通过。
+
+需要单独下载时，设置私有目录中的新文件路径 RECOVERY_DUMP_PATH，运行 pnpm backup download。明文 dump 含私人数据，演练结束后清除。恢复项目不可公开，实际核对账号注销、分享撤销、附件归属和权限隔离后销毁。完整性验证和本机模拟都不能代替真实恢复，具体步骤见 [服务配置指南](docs/service-setup.md)。
 
 没有真实服务凭据时，无法在本机完成邮件、邀请钩子、AI 提供商账单和恢复演练。部署前必须实际演练一次，再把站点提供给朋友。免费 Supabase 项目可能因不活跃暂停，备份存储的免费额度也需在创建时核验。
 

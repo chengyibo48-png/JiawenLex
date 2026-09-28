@@ -52,6 +52,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
   const lastWarning = useRef<number | null>(null);
   const submissionLock = useRef(false);
   const attemptId = useRef<string | null>(null);
+  const feedbackCache = useRef<{ key: string; feedback: Feedback } | null>(null);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -133,6 +134,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
   async function selectMaterial(material: Material) {
     if (!await canLeavePractice()) return;
     attemptId.current = null;
+    feedbackCache.current = null;
     setSelectedId(material.id); setSkill(material.skill); setMode("practice"); setAnswers({}); setRevealed([]); setFinished(false);
     setFeedback(null); setSubmittedText(""); setStartedAt(null); setElapsed(0); setTranscriptOpen(false); setManualTranscript("");
     setRecordedBlob(null); setRecordedUrl(null); setSaveRecording(false); setPendingTaskId(null); setPendingAudioPath(null); setMobilePane("questions");
@@ -173,17 +175,24 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
   }
 
   async function requestFeedback(text: string, material: Material, kind: "writing" | "speaking"): Promise<Feedback | null> {
+    const cacheKey = JSON.stringify([material.id, material.prompt, kind, text, textProvider, lang]);
+    if (feedbackCache.current?.key === cacheKey) return feedbackCache.current.feedback;
     if (!data.profile.ai_enabled || !actions.client) return null;
     if (!window.confirm(t(lang, `题目和你的作答将发送给 ${textProvider}，可能产生费用。继续？`, `The prompt and your answer will be sent to ${textProvider} and may incur a charge. Continue?`))) return null;
     const payload = { skill: kind, prompt: material.prompt, answer: text, overrideBudget: false };
     try {
       const response = await apiFetch(actions.client, "/api/ai/feedback", { method: "POST", body: JSON.stringify(payload) }) as { feedback: Feedback; budgetNearlyUsed?: boolean };
       if (response.budgetNearlyUsed) actions.notify(t(lang, "本月 AI 费用估算已接近预算", "This month's AI estimate is near your budget"));
+      feedbackCache.current = { key: cacheKey, feedback: response.feedback };
       return response.feedback;
     } catch (error) {
       if (error instanceof Error && error.message === "budget_confirmation_required") {
         if (window.confirm(t(lang, "本月 AI 用量已达到预算。仍要进行这一次调用？", "Your monthly AI estimate reached the budget. Continue with this call?"))) {
-          try { return (await apiFetch(actions.client, "/api/ai/feedback", { method: "POST", body: JSON.stringify({ ...payload, overrideBudget: true }) }) as { feedback: Feedback }).feedback; }
+          try {
+            const result = (await apiFetch(actions.client, "/api/ai/feedback", { method: "POST", body: JSON.stringify({ ...payload, overrideBudget: true }) }) as { feedback: Feedback }).feedback;
+            feedbackCache.current = { key: cacheKey, feedback: result };
+            return result;
+          }
           catch { actions.notify(t(lang, "AI 反馈暂时不可用，作答仍会保存。", "AI feedback is unavailable; your answer will still be saved.")); return null; }
         }
         return null;
@@ -199,6 +208,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
     submissionLock.current = true; setBusy(true);
     try {
       const result = await requestFeedback(writingText, selected, "writing");
+      setFeedback(result); setSubmittedText(writingText);
       const attempt: Attempt = {
         id: attemptId.current ??= crypto.randomUUID(), owner_id: data.profile.id, material_id: selected.id, skill: "writing",
         mode, duration_seconds: elapsed, correct_count: null, question_count: null,
@@ -219,6 +229,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
       const media = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!mounted.current) { media.getTracks().forEach((track) => track.stop()); return; }
       setPendingAudioPath(null); setPendingTaskId(null); setFinished(false); setFeedback(null); setManualTranscript(""); attemptId.current = null;
+      feedbackCache.current = null;
       const preferred = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((mime) => MediaRecorder.isTypeSupported(mime));
       const instance = new MediaRecorder(media, preferred ? { mimeType: preferred } : undefined);
       chunks.current = [];
@@ -277,7 +288,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
           for (let i = 0; i < 25; i++) {
             await new Promise((resolve) => window.setTimeout(resolve, 2500));
             const polled = await apiFetch(actions.client, `/api/ai/transcribe?taskId=${encodeURIComponent(taskId)}`) as { status: string; transcript?: string };
-            if (polled.status === "SUCCEEDED") { transcript = polled.transcript ?? ""; setPendingTaskId(null); break; }
+            if (polled.status === "SUCCEEDED") { transcript = polled.transcript ?? ""; setManualTranscript(transcript); setPendingTaskId(null); break; }
             if (polled.status === "FAILED") {
               setPendingTaskId(null);
               if (!saveRecording) setPendingAudioPath(null);
@@ -289,6 +300,7 @@ export function PracticeView({ data, actions, initialMaterialId, initialSkill, o
       }
       if (!transcript && !saveRecording) { actions.notify(t(lang, "尚无可保存的文字或录音，请补充转写文字。", "There is no transcript or recording to save yet. Add a transcript.")); return; }
       if (transcript && data.profile.ai_enabled) result = await requestFeedback(transcript, selected, "speaking");
+      setFeedback(result); setManualTranscript(transcript);
       const attempt: Attempt = {
         id: attemptId.current ??= crypto.randomUUID(), owner_id: data.profile.id, material_id: selected.id, skill: "speaking",
         mode, duration_seconds: elapsed, correct_count: null, question_count: null,

@@ -124,3 +124,20 @@ export async function conflictCopies(userId: string, materialId: string): Promis
     return await Promise.all(rows.filter((_, index) => String(keys[index]).startsWith(draftId(userId, materialId) + ":")).map((row: StoredDraft) => decode(database, row)));
   } finally { database.close(); }
 }
+export async function clearUserDrafts(userId: string): Promise<void> {
+  await Promise.allSettled([...queues.entries()].filter(([key]) => key.startsWith(userId + ":")).map(([, pending]) => pending));
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(["drafts", "conflicts"], "readwrite"), done = committed(transaction);
+    for (const name of ["drafts", "conflicts"]) {
+      const store = transaction.objectStore(name), request = store.openKeyCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (String(cursor.key).startsWith(userId + ":")) store.delete(cursor.key);
+        cursor.continue();
+      };
+    }
+    await done;
+  } finally { database.close(); }
+}

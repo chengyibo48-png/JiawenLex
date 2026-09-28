@@ -4,6 +4,7 @@ import { reserveBudget, settleBudget } from "@/lib/ai-budget";
 import { decryptKey } from "@/lib/key-crypto";
 import { estimatedAsrCostCny } from "@/lib/providers";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+import { speechTaskStatus, transcriptUrl, transcriptText, SpeechResultError, type SpeechTaskResult } from "@/lib/speech-result";
 
 const Input = z.object({ path: z.string().max(240), saved: z.boolean(), durationSeconds: z.number().min(0).max(3600).default(600), overrideBudget: z.boolean().default(false) });
 export const maxDuration = 60;
@@ -59,25 +60,25 @@ export async function GET(request: Request) {
     const { data: job, error: jobError } = await admin.from("transcription_jobs").select("*").eq("owner_id", userId).eq("task_id", taskId).maybeSingle();
     if (jobError) throw jobError;
     if (!job) throw new HttpError(404, "Transcription task unavailable");
-    if (job.status === "SUCCEEDED") return NextResponse.json({ status: "SUCCEEDED", transcript: job.transcript });
+    if (job.status === "SUCCEEDED") {
+      if (!job.save_recording && job.audio_path) {
+        const { error: cleanupError } = await admin.storage.from("study-audio").remove([job.audio_path]);
+        if (!cleanupError) await admin.from("transcription_jobs").update({ audio_path: "" }).eq("id", job.id);
+      }
+      return NextResponse.json({ status: "SUCCEEDED", transcript: job.transcript });
+    }
     if (job.status === "FAILED") return NextResponse.json({ status: "FAILED" });
     const config = await asrKey(admin, userId);
     const response = await fetch(`${asrBase(config.workspace_id)}/api/v1/tasks/${encodeURIComponent(taskId)}`, {
       headers: { Authorization: `Bearer ${decryptKey(config.encrypted_key, config.iv)}` }, signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) throw new HttpError(502, `Speech provider returned ${response.status}`);
-    const result = await response.json() as { output?: { task_status?: string; results?: { transcription_url?: string }[] } };
-    const status = result.output?.task_status ?? "PENDING";
+    const result = await response.json() as SpeechTaskResult;
+    const status = speechTaskStatus(result);
     if (status === "SUCCEEDED") {
-      const url = result.output?.results?.[0]?.transcription_url;
-      let transcriptUrl: URL;
-      try { transcriptUrl = new URL(url ?? ""); } catch { throw new HttpError(502, "Invalid transcript URL"); }
-      if (transcriptUrl.protocol !== "https:" || !(transcriptUrl.hostname === "aliyuncs.com" || transcriptUrl.hostname.endsWith(".aliyuncs.com"))) throw new HttpError(502, "Invalid transcript URL");
-      const file = await fetch(transcriptUrl, { redirect: "error", signal: AbortSignal.timeout(20000) });
+      const file = await fetch(transcriptUrl(result), { redirect: "error", signal: AbortSignal.timeout(20000) });
       if (!file.ok) throw new HttpError(502, "Transcript unavailable");
-      const text = await file.json() as { transcripts?: { text?: string }[] };
-      const transcript = (text.transcripts ?? []).map((part) => part.text ?? "").join("\n").slice(0, 100000);
-      if (!transcript.trim()) throw new HttpError(502, "Empty transcript");
+      const transcript = transcriptText(await file.json());
       if (job.usage_id) await settleBudget(admin, job.usage_id, Number(job.estimated_cny));
       else {
         const { error: usageError } = await admin.from("ai_usage").upsert(
@@ -86,12 +87,13 @@ export async function GET(request: Request) {
         );
         if (usageError) throw usageError;
       }
-      if (!job.save_recording) {
-        const { error: removeError } = await admin.storage.from("study-audio").remove([job.audio_path]);
-        if (removeError) throw removeError;
-      }
       const { error } = await admin.from("transcription_jobs").update({ status: "SUCCEEDED", transcript, completed_at: new Date().toISOString() }).eq("id", job.id);
       if (error) throw error;
+      // Persist the transcript before deleting audio; a cleanup failure must not lose it.
+      if (!job.save_recording) {
+        const { error: cleanupError } = await admin.storage.from("study-audio").remove([job.audio_path]);
+        if (!cleanupError) await admin.from("transcription_jobs").update({ audio_path: "" }).eq("id", job.id);
+      }
       return NextResponse.json({ status: "SUCCEEDED", transcript });
     }
     if (status === "FAILED") {
@@ -104,5 +106,5 @@ export async function GET(request: Request) {
       return NextResponse.json({ status: "FAILED" });
     }
     return NextResponse.json({ status });
-  } catch (error) { return apiError(error); }
+  } catch (error) { return apiError(error instanceof SpeechResultError ? new HttpError(502, error.message) : error); }
 }

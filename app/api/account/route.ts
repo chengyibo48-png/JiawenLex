@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 import { recordTombstone } from "@/lib/backup-ledger";
+import { createHash } from "node:crypto";
 
 async function listPaths(admin: ReturnType<typeof import("@/lib/supabase").getAdminClient>, bucket: string, prefix: string): Promise<string[]> {
   const paths: string[] = [];
@@ -36,15 +37,23 @@ export async function DELETE(request: Request) {
     for (const material of approved ?? []) {
       let newPath = material.file_path as string | null;
       if (newPath && nextOwner) {
-        const copied = `${nextOwner}/retained-${material.id}/${material.file_name ?? "attachment"}`;
+        const name = (material.file_name ?? "attachment").replace(/[\\/\x00-\x1f\x7f]/g, "-");
+        const copied = `${nextOwner}/retained-${material.id}/${name}`;
         const { error: copyError } = await admin.storage.from("study-files").copy(newPath, copied);
-        if (copyError) throw copyError;
+        if (copyError) {
+          // A previous attempt may have copied the object before its database update failed.
+          const [source, destination] = await Promise.all([admin.storage.from("study-files").download(newPath), admin.storage.from("study-files").download(copied)]);
+          if (source.error || destination.error || !source.data || !destination.data) throw copyError;
+          const digest = async (blob: Blob) => createHash("sha256").update(Buffer.from(await blob.arrayBuffer())).digest("hex");
+          if (await digest(source.data) !== await digest(destination.data)) throw copyError;
+        }
         newPath = copied;
       }
       if (nextOwner) {
         const { error } = await admin.from("materials").update({ owner_id: nextOwner, file_path: newPath }).eq("id", material.id);
         if (error) throw error;
-        await admin.from("deletion_events").insert({ owner_id: userId, entity: "transferred_material", entity_id: material.id });
+        const { error: transferError } = await admin.from("deletion_events").insert({ owner_id: userId, entity: "transferred_material", entity_id: material.id });
+        if (transferError) throw transferError;
         if (newPath) retained.add(newPath);
       }
     }

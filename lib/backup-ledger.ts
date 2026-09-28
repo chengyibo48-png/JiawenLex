@@ -3,7 +3,7 @@ import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { HttpError } from "./server-auth";
 
-export type Tombstone = { entity: "account" | "member_removed" | "materials" | "practice_attempts" | "vocabulary" | "share_grants" | "writing_drafts" | "purged_attempt"; entityId: string; ownerId: string; at: string };
+export type Tombstone = { entity: "account" | "member_removed" | "materials" | "practice_attempts" | "vocabulary" | "share_grants" | "writing_drafts" | "purged_attempt" | "provider_key"; entityId: string; ownerId: string; at: string; updatedBefore?: string; keyKind?: "text" | "asr" };
 
 export function backupClient(): { client: S3Client; bucket: string; key: Buffer } {
   const endpoint = process.env.BACKUP_S3_ENDPOINT;

@@ -20,26 +20,31 @@ export async function GET(request: Request) {
       const { error: ledgerError } = await admin.from("deletion_events").insert({ owner_id: attempt.owner_id, entity: "purged_attempt", entity_id: attempt.id });
       if (ledgerError) throw ledgerError;
     }
-    const { data: oldDrafts, error: draftError } = await admin.from("writing_drafts").select("id,owner_id").lt("updated_at", cutoff).limit(100);
+    const { data: oldDrafts, error: draftError } = await admin.from("writing_drafts").select("id,owner_id,updated_at").lt("updated_at", cutoff).limit(100);
     if (draftError) throw draftError;
     for (const draft of oldDrafts ?? []) {
-      await recordTombstone({ entity: "writing_drafts", entityId: draft.id, ownerId: draft.owner_id, at: new Date().toISOString() });
-      const { error: deleteError } = await admin.from("writing_drafts").delete().eq("id", draft.id);
+      await recordTombstone({ entity: "writing_drafts", entityId: draft.id, ownerId: draft.owner_id, at: new Date().toISOString(), updatedBefore: draft.updated_at });
+      const { error: deleteError } = await admin.from("writing_drafts").delete().eq("id", draft.id).lte("updated_at", draft.updated_at);
       if (deleteError) throw deleteError;
     }
     const { data: oldJobs, error: jobsError } = await admin.from("transcription_jobs").select("id,audio_path,save_recording,status").lt("created_at", cutoff).limit(100);
     if (jobsError) throw jobsError;
     for (const job of oldJobs ?? []) {
-      if (job.save_recording || job.status !== "SUCCEEDED") { const { error } = await admin.storage.from("study-audio").remove([job.audio_path]); if (error) throw error; }
+      if (job.audio_path) { const { error } = await admin.storage.from("study-audio").remove([job.audio_path]); if (error) throw error; }
       const { error: deleteError } = await admin.from("transcription_jobs").delete().eq("id", job.id);
       if (deleteError) throw deleteError;
     }
     const tempCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: abandoned, error: abandonedError } = await admin.from("transcription_jobs").select("id,audio_path").eq("save_recording", false).lt("created_at", tempCutoff).neq("status", "SUCCEEDED").limit(100);
+    const { data: abandoned, error: abandonedError } = await admin.from("transcription_jobs").select("id,audio_path,status").eq("save_recording", false).neq("audio_path", "").lt("created_at", tempCutoff).limit(100);
     if (abandonedError) throw abandonedError;
     for (const job of abandoned ?? []) {
       const { error: removeError } = await admin.storage.from("study-audio").remove([job.audio_path]);
       if (removeError) throw removeError;
+      if (job.status === "SUCCEEDED") {
+        const { error: cleanupError } = await admin.from("transcription_jobs").update({ audio_path: "" }).eq("id", job.id);
+        if (cleanupError) throw cleanupError;
+        continue;
+      }
       const { error: deleteError } = await admin.from("transcription_jobs").delete().eq("id", job.id);
       if (deleteError) throw deleteError;
     }

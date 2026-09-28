@@ -1,9 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { IDBFactory } from "fake-indexeddb";
-import { archiveLocalDraft, clearLocalDraft, conflictCopies, localDraftIds, readLocalDraft, saveLocalDraft } from "../lib/offline-drafts.ts";
+import { archiveLocalDraft, clearLocalDraft, clearUserDrafts, conflictCopies, localDraftIds, readLocalDraft, saveLocalDraft } from "../lib/offline-drafts.ts";
 
 function freshDatabase() { globalThis.indexedDB = new IDBFactory(); }
+test("Deleting an account clears its local drafts and conflict copies only", async () => {
+  freshDatabase();
+  await saveLocalDraft("owner", "essay", "Private draft", 1);
+  await archiveLocalDraft("owner", "essay");
+  await saveLocalDraft("another", "essay", "Other member", 1);
+  await clearUserDrafts("owner");
+  assert.deepEqual(await localDraftIds("owner"), []);
+  assert.deepEqual(await conflictCopies("owner", "essay"), []);
+  assert.equal((await readLocalDraft("another", "essay")).body, "Other member");
+});
 test("Encrypted drafts retain their ORIGINAL cloud version", async () => {
   freshDatabase();
   const local = await saveLocalDraft("owner", "essay", "Private essay content", 4);

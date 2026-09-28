@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { encryptKey } from "@/lib/key-crypto";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+import { recordTombstone } from "@/lib/backup-ledger";
 
 const Input = z.object({ kind: z.enum(["text", "asr"]), provider: z.enum(["deepseek", "qwen", "qwen-asr"]), key: z.string().min(8).max(500), workspaceId: z.string().max(80).default("") });
 
@@ -32,8 +33,13 @@ export async function DELETE(request: Request) {
   try {
     const { userId, admin } = await requireUser(request);
     const { kind } = z.object({ kind: z.enum(["text", "asr"]) }).parse(await request.json());
-    const { error } = await admin.from("provider_keys").delete().eq("owner_id", userId).eq("kind", kind);
+    const { data: current, error: readError } = await admin.from("provider_keys").select("updated_at").eq("owner_id", userId).eq("kind", kind).maybeSingle();
+    if (readError) throw readError;
+    if (!current) return NextResponse.json({ removed: true });
+    await recordTombstone({ entity: "provider_key", entityId: userId, ownerId: userId, keyKind: kind, updatedBefore: current.updated_at, at: new Date().toISOString() });
+    const { data: deleted, error } = await admin.from("provider_keys").delete().eq("owner_id", userId).eq("kind", kind).lte("updated_at", current.updated_at).select("kind");
     if (error) throw error;
+    if (!deleted?.length) throw new HttpError(409, "Provider key changed on another device. Refresh before removing it.");
     return NextResponse.json({ removed: true });
   } catch (error) { return apiError(error); }
 }

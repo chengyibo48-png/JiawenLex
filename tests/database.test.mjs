@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { deletionReplaySql, hash } from "../scripts/backup-core.mjs";
 
 const migrations = new URL("../supabase/migrations/", import.meta.url);
 const fixtureInvite = "JiawenLex-local-fixture-invite";
@@ -121,6 +122,39 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
         assert.deepEqual([...row.feedback_tags].sort(), ["cohesion", "grammar"]);
         assert.deepEqual(row.question_stats, [{ type: "short", count: 3, correct: 2 }]);
       } finally { await pg.exec("rollback"); }
+    });
+    await t.test("Recovery replays account deletion while retaining authorized attachments", async () => {
+      const materialId = "00000000-0000-4000-8000-000000000009";
+      await pg.query("insert into public.materials(id,owner_id,title,skill,visibility,approval,source_title,license_name,file_path,file_name) values ($1,$2,'Licensed group material','reading','shared','pending','Fixture source','Owner permission',$3,'notes.pdf')", [materialId, recipient, recipient + "/notes.pdf"]);
+      await pg.exec("begin"); await signedIn(pg);
+      await pg.query("update public.materials set approval='approved' where id=$1", [materialId]);
+      await pg.exec("commit");
+      await pg.query("insert into public.practice_attempts(owner_id,skill,mode,answer_body,feedback,submitted_at) values ($1,'writing','practice',$2,$3,now()-interval '366 days')", [owner, JSON.stringify({ essay: "expired essay" }), JSON.stringify({ tags: ["cohesion"] })]);
+      const events = [{ entity: "account", entityId: recipient, ownerId: recipient, at: "2026-09-29T00:00:00Z" }];
+      const replay = deletionReplaySql(events, "snapshots/fixture/", hash(Buffer.from("ledger")));
+      await pg.exec(replay);
+      await pg.exec(replay); // Retried recovery must be idempotent.
+      const retained = (await pg.query("select owner_id,file_path from public.materials where id=$1", [materialId])).rows[0];
+      assert.equal(retained.owner_id, owner);
+      assert.equal(retained.file_path, `${owner}/retained-${materialId}/notes.pdf`);
+      const mapping = (await pg.query("select old_path,new_path from private.jiawenlex_recovery_files")).rows[0];
+      assert.equal(mapping.old_path, recipient + "/notes.pdf");
+      assert.equal(mapping.new_path, retained.file_path);
+      assert.equal((await pg.query("select count(*)::int as n from auth.users where id=$1", [recipient])).rows[0].n, 0);
+      assert.equal((await pg.query("select count(*)::int as n from auth.sessions")).rows[0].n, 0);
+      const summary = (await pg.query("select answer_body,feedback,feedback_tags,purged_at from public.practice_attempts where owner_id=$1", [owner])).rows[0];
+      assert.equal(summary.answer_body, null); assert.equal(summary.feedback, null);
+      assert.deepEqual(summary.feedback_tags, ["cohesion"]); assert.ok(summary.purged_at);
+    });
+    await t.test("Restoring a revoked AI key deletes that version and preserves newer replacements", async () => {
+      await pg.query("insert into public.provider_keys(owner_id,kind,provider,encrypted_key,iv,updated_at) values ($1,'text','deepseek','fixture-ciphertext','fixture-iv','2026-09-01T00:00:00Z')", [owner]);
+      const event = { entity: "provider_key", entityId: owner, ownerId: owner, keyKind: "text", updatedBefore: "2026-09-01T00:00:00Z", at: "2026-09-02T00:00:00Z" };
+      const replay = deletionReplaySql([event], "snapshots/fixture/", hash(Buffer.from("ledger-key")));
+      await pg.exec(replay);
+      assert.equal((await pg.query("select count(*)::int n from public.provider_keys")).rows[0].n, 0);
+      await pg.query("insert into public.provider_keys(owner_id,kind,provider,encrypted_key,iv,updated_at) values ($1,'text','deepseek','new-fixture-ciphertext','fixture-iv','2026-09-03T00:00:00Z')", [owner]);
+      await pg.exec(replay);
+      assert.equal((await pg.query("select count(*)::int n from public.provider_keys")).rows[0].n, 1);
     });
   } finally { await pg.close(); }
 });
