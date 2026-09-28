@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import {
   BookOpen, CalendarDays, ChartNoAxesCombined, ChevronRight, House, LibraryBig,
@@ -8,7 +9,9 @@ import {
 } from "lucide-react";
 import { initialDemoData } from "@/lib/demo";
 import { demoMode, deleteRow, getBrowserClient, loadWorkspace, saveRow } from "@/lib/supabase";
-import type { Language, Profile, StudyTask, View, WorkspaceData } from "@/lib/types";
+import type { Language, Profile, Skill, StudyTask, View, WorkspaceData } from "@/lib/types";
+import { clearLocalDraft, localDraftIds } from "@/lib/offline-drafts";
+import { syncPendingDrafts } from "@/lib/draft-sync";
 import { dueWords, localDate, startOfWeek } from "@/lib/study";
 import { PracticeView } from "./practice-view";
 import { AdminView, LibraryView, PlanView, ProgressView, SettingsView, TodayView, VocabularyView, type ViewActions } from "./views";
@@ -37,6 +40,12 @@ export function Workspace() {
   const [toast, setToast] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [resetFlow, setResetFlow] = useState(false);
+  const [practiceSkill, setPracticeSkill] = useState<Skill>("reading");
+  const leavePractice = useRef<(() => Promise<boolean>) | null>(null);
+  const activeDraftMaterial = useRef<string | null>(null);
+  const [logoutScope, setLogoutScope] = useState<"local" | "global" | null>(null);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const refreshBusy = useRef(false);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -46,16 +55,20 @@ export function Workspace() {
   const refresh = useCallback(async () => {
     if (demoMode) return;
     if (!client) return;
-    const { data: auth } = await client.auth.getUser();
-    if (!auth.user) { setUser(null); setData(null); setLoading(false); return; }
-    setUser(auth.user);
+    if (refreshBusy.current) return;
+    refreshBusy.current = true;
     try {
+      const { data: auth, error: authError } = await client.auth.getUser();
+      if (authError && authError.status !== 401 && authError.status !== 403) throw authError;
+      if (!auth.user) { setUser(null); setData(null); return; }
+      setUser(auth.user);
       const workspace = await loadWorkspace(client, auth.user.id);
       setData(workspace);
     } catch (error) {
-      setData(null);
+      if (error instanceof Error && error.message === "账号已停用或个人资料尚未建立") setData(null);
       notify(error instanceof Error ? error.message : "加载失败");
     } finally {
+      refreshBusy.current = false;
       setLoading(false);
     }
   }, [client, notify]);
@@ -75,11 +88,30 @@ export function Workspace() {
     void refresh();
     const { data: listener } = client.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY") setResetFlow(true);
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") void refresh();
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "PASSWORD_RECOVERY") window.setTimeout(() => void refresh(), 0);
       if (event === "SIGNED_OUT") { setUser(null); setData(null); setLoading(false); }
     });
     return () => listener.subscription.unsubscribe();
   }, [client, refresh]);
+
+  useEffect(() => {
+    if (demoMode) return;
+    const reload = () => { if (document.visibilityState === "visible") void refresh(); };
+    window.addEventListener("online", reload);
+    document.addEventListener("visibilitychange", reload);
+    const interval = window.setInterval(reload, 30000);
+    return () => { window.removeEventListener("online", reload); document.removeEventListener("visibilitychange", reload); window.clearInterval(interval); };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!client || !user?.id || demoMode) return;
+    const sync = () => {
+      void syncPendingDrafts(client, user.id, () => activeDraftMaterial.current).then((changed) => { if (changed) void refresh(); });
+    };
+    sync();
+    window.addEventListener("online", sync);
+    return () => window.removeEventListener("online", sync);
+  }, [client, user?.id, view, refresh]);
 
   useEffect(() => {
     if (demoMode && data) localStorage.setItem("jiawenlex-demo-v1", JSON.stringify(data));
@@ -119,7 +151,7 @@ export function Workspace() {
       await saveRow(client, "profiles", profile as unknown as Record<string, unknown>);
       setData((previous) => previous ? { ...previous, profile } : previous);
       notify(profile.language === "zh" ? "设置已保存" : "Settings saved");
-    } catch (error) { notify(error instanceof Error ? error.message : "保存失败"); }
+    } catch (error) { notify(error instanceof Error ? error.message : "保存失败"); throw error; }
   }, [client, notify]);
 
   const replacePlan = useCallback(async (tasks: StudyTask[]) => {
@@ -127,28 +159,40 @@ export function Workspace() {
     const week = startOfWeek();
     try {
       if (client) {
-        const { error: deletionError } = await client.from("study_tasks").delete().eq("owner_id", data.profile.id).eq("week_start", week).eq("status", "todo").eq("source", "rule");
-        if (deletionError) throw deletionError;
         const newRows = tasks.filter((task) => !data.tasks.some((old) => old.id === task.id));
-        if (newRows.length) {
-          const { error: insertionError } = await client.from("study_tasks").insert(newRows);
-          if (insertionError) throw insertionError;
+        const expected = data.tasks.filter((task) => task.week_start === week && task.status === "todo" && task.source === "rule").map((task) => task.id);
+        const { error } = await client.rpc("replace_weekly_plan", { plan_week: week, expected_ids: expected, new_tasks: newRows });
+        if (error) {
+          if (error.code === "PGRST202") throw new Error(t(data.profile.language, "数据库更新尚未应用，当前计划已保留，暂不能重新安排。", "The database update is pending. Your current plan is preserved; rebalance is temporarily unavailable."));
+          throw error;
         }
+        await refresh();
+      } else {
+        setData((previous) => previous ? { ...previous, tasks: [...previous.tasks.filter((task) => task.week_start !== week), ...tasks] } : previous);
       }
-      setData((previous) => previous ? { ...previous, tasks: [...previous.tasks.filter((task) => task.week_start !== week), ...tasks] } : previous);
       notify(t(data.profile.language, "本周计划已更新", "This week's plan is updated"));
-    } catch (error) { notify(error instanceof Error ? error.message : "计划更新失败"); }
-  }, [client, data, notify]);
+    } catch (error) { await refresh(); notify(error instanceof Error ? (error.message.includes("plan_conflict") ? t(data.profile.language, "任务已在其他页面修改，请根据最新记录重新安排。", "Tasks changed elsewhere. Rebalance using the refreshed plan.") : error.message) : "计划更新失败"); }
+  }, [client, data, notify, refresh]);
+
+  function navigate(next: View) {
+    if (next === view) return;
+    void (async () => {
+      if (view === "practice" && leavePractice.current && !await leavePractice.current()) return;
+      setView(next);
+    })();
+  }
 
   const actions: ViewActions = {
     client, upsert, remove, updateProfile, replacePlan, notify, refresh,
-    openPractice: (materialId?: string | null) => { setPracticeMaterialId(materialId ?? null); setView("practice"); },
-    setView,
+    openPractice: (materialId?: string | null, skill?: Skill) => { setPracticeMaterialId(materialId ?? null); setPracticeSkill(skill ?? "reading"); navigate("practice"); },
+    setView: navigate,
+    registerPracticeGuard: (guard, materialId) => { leavePractice.current = guard; activeDraftMaterial.current = materialId ?? null; },
+    acceptDraft: (draft) => { setData((previous) => previous && previous.profile.id === draft.owner_id ? { ...previous, drafts: [...previous.drafts.filter((row) => row.material_id !== draft.material_id), draft] } : previous); },
   };
 
   if (loading) return <div className="loading-screen"><div className="spinner" /><p>JiawenLex</p></div>;
   if (!demoMode && !client) return <SetupScreen />;
-  if (!data) return <AuthScreen client={client} onSignedIn={refresh} resetFlow={resetFlow} setResetFlow={setResetFlow} notify={notify} />;
+  if (!data || resetFlow) return <AuthScreen client={client} onSignedIn={refresh} resetFlow={resetFlow} setResetFlow={setResetFlow} notify={notify} />;
   if (!data.profile.onboarded) return <Onboarding profile={data.profile} onSave={updateProfile} />;
 
   const { profile } = data;
@@ -158,9 +202,22 @@ export function Workspace() {
   const currentView = nav.find((item) => item.id === view);
 
   async function logout(scope: "local" | "global" = "local") {
-    if (client) await client.auth.signOut({ scope });
-    if (demoMode) { localStorage.removeItem("jiawenlex-demo-v1"); setData(initialDemoData()); }
-    setUser(null);
+    try {
+      const pending = await localDraftIds(profile.id);
+      if (pending.length) { setLogoutScope(scope); return; }
+      await finishLogout(scope, false);
+    } catch { notify(t(lang, "无法检查本机草稿，请稍后重试。", "Could not check local drafts. Please retry.")); }
+  }
+  async function finishLogout(scope: "local" | "global", discard: boolean) {
+    setLogoutBusy(true);
+    try {
+      if (discard) for (const id of await localDraftIds(profile.id)) await clearLocalDraft(profile.id, id);
+      if (client) { const { error } = await client.auth.signOut({ scope }); if (error) throw error; }
+      if (demoMode) { localStorage.removeItem("jiawenlex-demo-v1"); setData(initialDemoData()); }
+      else setData(null);
+      setUser(null); setLogoutScope(null);
+    } catch (error) { notify(error instanceof Error ? error.message : "退出失败"); }
+    finally { setLogoutBusy(false); }
   }
 
   return (
@@ -171,9 +228,9 @@ export function Workspace() {
         <nav className="side-nav" aria-label={t(lang, "主导航", "Main navigation")}>
           {nav.map((item) => {
             const Icon = item.icon;
-            return <button key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => setView(item.id)}><Icon size={19} strokeWidth={1.8} /><span>{t(lang, item.zh, item.en)}</span>{item.id === "vocabulary" && due > 0 && <span className="nav-count">{due}</span>}</button>;
+            return <button key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => navigate(item.id)}><Icon size={19} strokeWidth={1.8} /><span>{t(lang, item.zh, item.en)}</span>{item.id === "vocabulary" && due > 0 && <span className="nav-count">{due}</span>}</button>;
           })}
-          {profile.role === "admin" && <button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}><ShieldCheck size={19} strokeWidth={1.8} /><span>{t(lang, "管理", "Admin")}</span></button>}
+          {profile.role === "admin" && <button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => navigate("admin")}><ShieldCheck size={19} strokeWidth={1.8} /><span>{t(lang, "管理", "Admin")}</span></button>}
         </nav>
         <div className="sidebar-bottom">
           <div className="goal-mini"><span className="goal-mini-icon"><Sparkles size={17} /></span><div><small>{t(lang, "目标分数", "Target band")}</small><strong>{profile.goal_overall?.toFixed(1) ?? "—"}</strong></div><ChevronRight size={17} /></div>
@@ -191,7 +248,7 @@ export function Workspace() {
         </header>
         <main className="main-content">
           {view === "today" && <TodayView data={data} actions={actions} />}
-          {view === "practice" && <PracticeView data={data} actions={actions} initialMaterialId={practiceMaterialId} onInitialConsumed={() => setPracticeMaterialId(null)} />}
+          {view === "practice" && <PracticeView data={data} actions={actions} initialSkill={practiceSkill} initialMaterialId={practiceMaterialId} onInitialConsumed={() => setPracticeMaterialId(null)} />}
           {view === "vocabulary" && <VocabularyView data={data} actions={actions} />}
           {view === "plan" && <PlanView data={data} actions={actions} />}
           {view === "library" && <LibraryView data={data} actions={actions} />}
@@ -203,11 +260,12 @@ export function Workspace() {
       <nav className="mobile-nav" aria-label={t(lang, "手机导航", "Mobile navigation")}>
         {nav.slice(0, 4).map((item) => {
           const Icon = item.icon;
-          return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { setView(item.id); setMoreOpen(false); }}><Icon size={20} /><span>{t(lang, item.zh, item.en)}</span></button>;
+          return <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => { navigate(item.id); setMoreOpen(false); }}><Icon size={20} /><span>{t(lang, item.zh, item.en)}</span></button>;
         })}
         <button className={moreOpen || ["library", "progress", "settings", "admin"].includes(view) ? "active" : ""} onClick={() => setMoreOpen(!moreOpen)}><Settings2 size={20} /><span>{t(lang, "更多", "More")}</span></button>
       </nav>
-      {moreOpen && <div className="mobile-more">{nav.slice(4).concat(profile.role === "admin" ? [{ id: "admin", zh: "管理", en: "Admin", icon: ShieldCheck }] : []).map((item) => <button key={item.id} onClick={() => { setView(item.id); setMoreOpen(false); }}>{t(lang, item.zh, item.en)}</button>)}</div>}
+      {moreOpen && <div className="mobile-more">{nav.slice(4).concat(profile.role === "admin" ? [{ id: "admin", zh: "管理", en: "Admin", icon: ShieldCheck }] : []).map((item) => <button key={item.id} onClick={() => { navigate(item.id); setMoreOpen(false); }}>{t(lang, item.zh, item.en)}</button>)}</div>}
+      {logoutScope && <div className="modal-backdrop"><section className="modal-card" role="dialog" aria-modal="true" aria-label={t(lang, "未同步的草稿", "Unsynced drafts")}><h3>{t(lang, "本机仍有未同步草稿", "Unsynced drafts remain on this device")}</h3><p>{t(lang, "保留后，下次用同一账号登录此浏览器可恢复。清理会删除尚未同步的文字。", "Keep them to restore after signing in on this browser again. Discarding deletes unsynced text.")}</p><div className="button-row"><button className="button primary" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, false)}>{t(lang, "保留并退出", "Keep and sign out")}</button><button className="button danger-outline" disabled={logoutBusy} onClick={() => void finishLogout(logoutScope, true)}>{t(lang, "清理并退出", "Discard and sign out")}</button><button className="button secondary" disabled={logoutBusy} onClick={() => setLogoutScope(null)}>{t(lang, "取消", "Cancel")}</button></div></section></div>}
       {toast && <div className="toast" role="status"><span>{toast}</span><button onClick={() => setToast(null)} aria-label={t(lang, "关闭", "Close")}><X size={16} /></button></div>}
     </div>
   );
@@ -215,7 +273,7 @@ export function Workspace() {
 
 function Onboarding({ profile, onSave }: { profile: Profile; onSave: (profile: Profile) => Promise<void> }) {
   const [draft, setDraft] = useState(profile);
-  return <div className="auth-screen"><div className="auth-card onboarding-card"><div className="brand-mark">JL</div><span className="eyebrow">WELCOME TO JIAWENLEX</span><h1>{t(draft.language, "先定下你的学习方向", "Set your study direction")}</h1><p>{t(draft.language, "这些目标之后都可以在设置里调整。AI 密钥也可以稍后再配。", "You can change these goals later. AI setup is optional.")}</p><form onSubmit={(event) => { event.preventDefault(); void onSave({ ...draft, onboarded: true }); }}>
+  return <div className="auth-screen"><div className="auth-card onboarding-card"><div className="brand-mark">JL</div><span className="eyebrow">WELCOME TO JIAWENLEX</span><h1>{t(draft.language, "先定下你的学习方向", "Set your study direction")}</h1><p>{t(draft.language, "这些目标之后都可以在设置里调整。AI 密钥也可以稍后再配。", "You can change these goals later. AI setup is optional.")}</p><form onSubmit={(event) => { event.preventDefault(); void onSave({ ...draft, onboarded: true }).catch(() => undefined); }}>
     <label>{t(draft.language, "考试类型", "Exam track")}<select value={draft.track} onChange={(event) => setDraft({ ...draft, track: event.target.value as Profile["track"] })}><option value="academic">Academic</option><option value="general">General Training</option></select></label>
     <label>{t(draft.language, "目标总分", "Overall target")}<input type="number" min="0" max="9" step="0.5" value={draft.goal_overall ?? ""} onChange={(event) => setDraft({ ...draft, goal_overall: event.target.value ? Number(event.target.value) : null })} /></label>
     <label>{t(draft.language, "考试日期", "Exam date")}<input type="date" value={draft.target_date ?? ""} onChange={(event) => setDraft({ ...draft, target_date: event.target.value || null })} /></label>

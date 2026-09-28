@@ -11,7 +11,7 @@ export async function GET(request: Request) {
     const { data, error } = await admin.from("provider_keys").select("kind,provider,workspace_id").eq("owner_id", userId);
     if (error) throw error;
     const text = data?.find((row) => row.kind === "text");
-    return NextResponse.json({ text: !!text, asr: data?.some((row) => row.kind === "asr") ?? false, provider: text?.provider ?? "deepseek", workspaceId: text?.workspace_id ?? data?.find((row) => row.kind === "asr")?.workspace_id ?? "" });
+    return NextResponse.json({ text: !!text, asr: data?.some((row) => row.kind === "asr") ?? false, provider: text?.provider ?? "deepseek", workspaceId: text?.workspace_id ?? "", asrWorkspaceId: data?.find((row) => row.kind === "asr")?.workspace_id ?? "" });
   } catch (error) { return apiError(error); }
 }
 

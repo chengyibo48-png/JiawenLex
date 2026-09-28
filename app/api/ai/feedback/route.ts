@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { decryptKey } from "@/lib/key-crypto";
-import { checkBudget } from "@/lib/ai-budget";
+import { reserveBudget, settleBudget } from "@/lib/ai-budget";
 import { estimatedTextCostCny, generateFeedback } from "@/lib/providers";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 
 const Input = z.object({ skill: z.enum(["writing", "speaking"]), prompt: z.string().min(1).max(30000), answer: z.string().min(1).max(100000), overrideBudget: z.boolean().default(false) });
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
@@ -16,11 +17,18 @@ export async function POST(request: Request) {
     if (error) throw error;
     if (!config) throw new HttpError(400, "Set a text provider key first");
     const preflight = estimatedTextCostCny(config.provider, Math.ceil((input.prompt.length + input.answer.length) / 2), 1200);
-    const used = await checkBudget(admin, userId, profile.monthly_budget_cny, preflight, input.overrideBudget);
-    const { feedback, inputTokens, outputTokens } = await generateFeedback(config.provider, config.workspace_id, decryptKey(config.encrypted_key, config.iv), input.skill, input.prompt, input.answer);
+    const reservation = await reserveBudget(admin, userId, config.provider, `${input.skill}_feedback`, preflight, input.overrideBudget);
+    let generated;
+    try {
+      generated = await generateFeedback(config.provider, config.workspace_id, decryptKey(config.encrypted_key, config.iv), input.skill, input.prompt, input.answer, profile.language);
+    } catch (error) {
+      // A timed-out provider may still bill the request; keep a conservative estimate.
+      await settleBudget(admin, reservation.id, preflight);
+      throw error;
+    }
+    const { feedback, inputTokens, outputTokens } = generated;
     const estimated = estimatedTextCostCny(config.provider, inputTokens, outputTokens);
-    const { error: usageError } = await admin.from("ai_usage").insert({ owner_id: userId, provider: config.provider, operation: `${input.skill}_feedback`, estimated_cny: estimated });
-    if (usageError) throw usageError;
-    return NextResponse.json({ feedback, estimatedCny: estimated, budgetNearlyUsed: used + estimated >= Number(profile.monthly_budget_cny) * 0.8 });
+    await settleBudget(admin, reservation.id, estimated);
+    return NextResponse.json({ feedback, estimatedCny: estimated, budgetNearlyUsed: reservation.used + estimated >= Number(profile.monthly_budget_cny) * 0.8 });
   } catch (error) { return apiError(error); }
 }

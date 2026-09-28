@@ -54,12 +54,21 @@ export async function saveRow(client: SupabaseClient | null, table: string, row:
   // privileges the app intentionally does not grant for these tables.
   if (["practice_attempts", "share_grants", "share_comments"].includes(table)) {
     const { error } = await client.from(table).insert(row);
-    if (error) throw error;
+    if (error && table === "practice_attempts" && error.code === "PGRST204" && /feedback_tags|question_stats/.test(error.message)) {
+      // Compatibility until the reviewed, additive summary migration is applied.
+      const legacy = { ...row }; delete legacy.feedback_tags; delete legacy.question_stats;
+      const retry = await client.from(table).insert(legacy);
+      if (retry.error) throw retry.error;
+    } else if (error?.code === "23505" && table === "practice_attempts") {
+      const { data: existing, error: readError } = await client.from(table).select("owner_id,skill,material_id").eq("id", row.id).maybeSingle();
+      if (readError || !existing || existing.owner_id !== row.owner_id || existing.skill !== row.skill || existing.material_id !== row.material_id) throw error;
+    } else if (error) throw error;
     return;
   }
   const { data, error } = await client.from(table).update(row).eq("id", row.id).select("id");
   if (error) throw error;
   if (data?.length) return;
+  if (table === "profiles") throw new Error("个人设置未保存，请刷新后重试。");
   const inserted = await client.from(table).insert(row);
   if (inserted.error) throw inserted.error;
 }

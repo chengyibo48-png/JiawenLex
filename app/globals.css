@@ -454,3 +454,16 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
 .type-stat-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .type-stat-row:last-child { border-bottom: 0; }
 .type-stat-row span { color: var(--muted); text-align: right; }
+
+.quiz-term { font-size: 1.7rem; margin: 16px 0; overflow-wrap: anywhere; }
+.quiz-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.quiz-choices .button { text-align: left; justify-content: flex-start; white-space: normal; overflow-wrap: anywhere; min-height: 48px; }
+.quiz-choices .selected { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-strong); opacity: 1; }
+.quiz-result { margin-top: 16px; }
+.draft-copy { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; max-height: 200px; overflow: auto; }
+.save-status.error { color: var(--danger); }
+@media (max-width: 610px) {
+  .quiz-choices { grid-template-columns: 1fr; }
+  .button-row { flex-wrap: wrap; }
+  .type-stat-row { align-items: flex-start; }
+}

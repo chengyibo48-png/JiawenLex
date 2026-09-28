@@ -56,7 +56,9 @@ begin
     raise exception 'Invitation leaked into retained user metadata';
   end if;
 
-  perform set_config('request.jwt.claims', jsonb_build_object('sub', owner_id, 'role', 'authenticated')::text, true);
+  insert into auth.sessions(id,user_id) values (admin_id,admin_id),(owner_id,owner_id),(recipient_id,recipient_id);
+
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', owner_id, 'session_id', owner_id, 'role', 'authenticated')::text, true);
   execute 'set local role authenticated';
   insert into public.materials(id, owner_id, title, skill)
   values (material_id, owner_id, 'Private writing prompt', 'writing');
@@ -76,7 +78,7 @@ begin
   end;
   if not denied then raise exception 'Member changed own administrative role'; end if;
 
-  perform set_config('request.jwt.claims', jsonb_build_object('sub', admin_id, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', admin_id, 'session_id', admin_id, 'role', 'authenticated')::text, true);
   if exists (select 1 from public.materials where id = material_id)
     or exists (select 1 from public.practice_attempts where id = attempt_id) then
     raise exception 'Administrator can read member private data';
@@ -86,7 +88,7 @@ begin
     raise exception 'Private credentials or invitation control is exposed';
   end if;
 
-  perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient_id, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient_id, 'session_id', recipient_id, 'role', 'authenticated')::text, true);
   if not exists (select 1 from public.materials where id = material_id)
     or not exists (select 1 from public.practice_attempts where id = attempt_id) then
     raise exception 'Recipient cannot read granted material and attempt';
@@ -105,7 +107,7 @@ begin
   execute 'reset role';
   perform set_config('request.jwt.claims', '{}', true);
   update public.share_grants set revoked_at = now() where id in (share_id, attempt_share_id);
-  perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient_id, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient_id, 'session_id', recipient_id, 'role', 'authenticated')::text, true);
   execute 'set local role authenticated';
   if exists (select 1 from public.materials where id = material_id)
     or exists (select 1 from public.practice_attempts where id = attempt_id)
@@ -136,7 +138,7 @@ begin
   if not denied then raise exception 'Sixth active account was accepted'; end if;
 
   update public.profiles set status = 'removed' where id = owner_id;
-  perform set_config('request.jwt.claims', jsonb_build_object('sub', owner_id, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', owner_id, 'session_id', owner_id, 'role', 'authenticated')::text, true);
   execute 'set local role authenticated';
   if exists (select 1 from public.materials) or exists (select 1 from public.practice_attempts)
     or exists (select 1 from public.profiles) then

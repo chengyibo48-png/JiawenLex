@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { checkBudget } from "@/lib/ai-budget";
+import { reserveBudget, settleBudget } from "@/lib/ai-budget";
 import { decryptKey } from "@/lib/key-crypto";
 import { estimatedAsrCostCny } from "@/lib/providers";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 
 const Input = z.object({ path: z.string().max(240), saved: z.boolean(), durationSeconds: z.number().min(0).max(3600).default(600), overrideBudget: z.boolean().default(false) });
+export const maxDuration = 60;
 const workspacePattern = /^[A-Za-z0-9_-]{4,80}$/;
 
 function asrBase(workspaceId: string) {
@@ -28,10 +29,13 @@ export async function POST(request: Request) {
     if (!input.path.startsWith(`${userId}/`)) throw new HttpError(403, "Audio access denied");
     const config = await asrKey(admin, userId);
     const estimated = estimatedAsrCostCny(Math.max(60, input.durationSeconds));
-    const used = await checkBudget(admin, userId, profile.monthly_budget_cny, estimated, input.overrideBudget);
+
     const { data: signed, error: signError } = await admin.storage.from("study-audio").createSignedUrl(input.path, 3600);
     if (signError || !signed) throw new HttpError(404, "Audio unavailable");
-    const response = await fetch(`${asrBase(config.workspace_id)}/api/v1/services/audio/asr/transcription`, {
+    const base = asrBase(config.workspace_id);
+    const jobId = crypto.randomUUID();
+    const reservation = await reserveBudget(admin, userId, "qwen-asr", "transcription", estimated, input.overrideBudget, jobId);
+    const response = await fetch(`${base}/api/v1/services/audio/asr/transcription`, {
       method: "POST",
       headers: { Authorization: `Bearer ${decryptKey(config.encrypted_key, config.iv)}`, "Content-Type": "application/json", "X-DashScope-Async": "enable" },
       body: JSON.stringify({ model: "paraformer-v2", input: { file_urls: [signed.signedUrl] }, parameters: { language_hints: ["en"] } }),
@@ -41,9 +45,10 @@ export async function POST(request: Request) {
     const result = await response.json() as { output?: { task_id?: string }; code?: string };
     const taskId = result.output?.task_id;
     if (!taskId) throw new HttpError(502, result.code ?? "Speech provider returned no task");
-    const { error } = await admin.from("transcription_jobs").insert({ owner_id: userId, task_id: taskId, audio_path: input.path, save_recording: input.saved, estimated_cny: estimated, status: "PENDING" });
+    await settleBudget(admin, reservation.id, estimated);
+    const { error } = await admin.from("transcription_jobs").insert({ id: jobId, usage_id: reservation.id, owner_id: userId, task_id: taskId, audio_path: input.path, save_recording: input.saved, estimated_cny: estimated, status: "PENDING" });
     if (error) throw error;
-    return NextResponse.json({ taskId, budgetNearlyUsed: used + estimated >= Number(profile.monthly_budget_cny) * 0.8 });
+    return NextResponse.json({ taskId, budgetNearlyUsed: reservation.used + estimated >= Number(profile.monthly_budget_cny) * 0.8 });
   } catch (error) { return apiError(error); }
 }
 
@@ -73,11 +78,14 @@ export async function GET(request: Request) {
       const text = await file.json() as { transcripts?: { text?: string }[] };
       const transcript = (text.transcripts ?? []).map((part) => part.text ?? "").join("\n").slice(0, 100000);
       if (!transcript.trim()) throw new HttpError(502, "Empty transcript");
-      const { error: usageError } = await admin.from("ai_usage").upsert(
-        { owner_id: userId, provider: "qwen-asr", operation: "transcription", reference_id: job.id, estimated_cny: job.estimated_cny },
-        { onConflict: "owner_id,provider,operation,reference_id", ignoreDuplicates: true },
-      );
-      if (usageError) throw usageError;
+      if (job.usage_id) await settleBudget(admin, job.usage_id, Number(job.estimated_cny));
+      else {
+        const { error: usageError } = await admin.from("ai_usage").upsert(
+          { owner_id: userId, provider: "qwen-asr", operation: "transcription", reference_id: job.id, estimated_cny: job.estimated_cny },
+          { onConflict: "owner_id,provider,operation,reference_id", ignoreDuplicates: true },
+        );
+        if (usageError) throw usageError;
+      }
       if (!job.save_recording) {
         const { error: removeError } = await admin.storage.from("study-audio").remove([job.audio_path]);
         if (removeError) throw removeError;

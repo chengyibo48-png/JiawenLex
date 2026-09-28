@@ -92,6 +92,8 @@ export interface Attempt {
   question_count: number | null;
   answer_body: Record<string, string> | null;
   feedback: Feedback | null;
+  feedback_tags?: string[];
+  question_stats?: { type: string; count: number; correct: number }[];
   transcript: string | null;
   recording_path: string | null;
   saved_recording: boolean;

@@ -4,8 +4,8 @@ import { apiError, HttpError } from "@/lib/server-auth";
 export async function GET(request: Request) {
   try {
     const token = new URL(request.url).searchParams.get("token") ?? "";
-    const { userId, materialId } = parseFileToken(token);
-    const { admin, material } = await accessibleMaterial(userId, materialId);
+    const { userId, materialId, sessionId } = parseFileToken(token);
+    const { admin, material } = await accessibleMaterial(userId, materialId, sessionId);
     const { data, error } = await admin.storage.from("study-files").createSignedUrl(material.file_path, 45);
     if (error || !data) throw new HttpError(404, "Attachment unavailable");
     const range = request.headers.get("range");

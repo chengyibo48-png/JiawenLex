@@ -1,6 +1,7 @@
 import "server-only";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { HttpError } from "./server-auth";
 
 export type Tombstone = { entity: "account" | "member_removed" | "materials" | "practice_attempts" | "vocabulary" | "share_grants" | "writing_drafts" | "purged_attempt"; entityId: string; ownerId: string; at: string };
 
@@ -11,7 +12,7 @@ export function backupClient(): { client: S3Client; bucket: string; key: Buffer 
   const accessKeyId = process.env.BACKUP_S3_ACCESS_KEY_ID;
   const secretAccessKey = process.env.BACKUP_S3_SECRET_ACCESS_KEY;
   const secret = process.env.BACKUP_ENCRYPTION_SECRET;
-  if (!endpoint || !region || !bucket || !accessKeyId || !secretAccessKey || !secret || secret.length < 32) throw new Error("Independent backup storage is not configured");
+  if (!endpoint || !region || !bucket || !accessKeyId || !secretAccessKey || !secret || secret.length < 32) throw new HttpError(503, "独立备份存储尚未配置，暂不能执行删除或撤销操作。请由管理员完成备份配置。");
   return { client: new S3Client({ endpoint, region, forcePathStyle: true, credentials: { accessKeyId, secretAccessKey } }), bucket, key: createHash("sha256").update(secret).digest() };
 }
 
