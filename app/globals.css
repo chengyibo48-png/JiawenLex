@@ -629,3 +629,5 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
   .app-shell select { min-height: 44px; }
   .app-shell .back-link { display: inline-flex; align-items: center; }
 }
+
+.ai-setup-steps{display:flex;flex-wrap:wrap;gap:12px 30px;padding-inline-start:24px;margin-block:20px;color:var(--muted)}.ai-connection-result{padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--primary-soft);margin-block:14px}.ai-connection-result p:last-child{margin-bottom:0}.ai-budget-settings{display:grid;gap:12px;border-top:1px solid var(--border);margin-top:24px;padding-top:20px}.ai-budget-settings h4,.ai-budget-settings p{margin:0}.ai-budget-settings>label:not(.switch-row){max-width:380px}.ai-budget-settings>.button{justify-self:start}.provider-box .text-link{display:inline-flex;align-items:center;min-height:44px}.provider-box input,.provider-box select{max-width:100%}

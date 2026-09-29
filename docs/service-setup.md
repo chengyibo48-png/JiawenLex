@@ -1,6 +1,6 @@
 # JiawenLex：把待完成服务配置好
 
-更新：2026-09-29。正式网站 https://jiawen-lex.vercel.app 已可访问，用户已确认管理员登录成功；线上配置卡显示网站地址、SMTP 与 AI 密钥加密配置齐全。本机 Supabase 和 QQ SMTP 连接检查通过。仍待真实邮件收件与回跳、个人 AI 服务、独立备份存储、备份数据库连接、定时任务及恢复演练。
+更新：2026-09-29。正式网站 https://jiawen-lex.vercel.app 已可访问，用户已确认管理员登录成功；线上配置卡显示网站地址、SMTP 与 AI 密钥加密配置齐全。本机 Supabase 和 QQ SMTP 连接检查通过。独立 B2 加密备份已生成并通过本机解密与完整性复核；每日任务已启用，受保护接口检查通过。仍待真实邮件收件与回跳、个人 AI 服务及完整隔离恢复演练。
 
 “配置齐全”只表示设置存在；“连接通过”表示服务接受了连接；“验收通过”需要实际完成邮件、AI 或恢复流程。这三个状态分开记录。
 
@@ -30,15 +30,16 @@ Vercel 的 GitHub 集成会部署后续提交，操作依据 [官方导入说明
 
 ## 2. 配置个人 AI 服务
 
-API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的“设置 → AI 服务与预算”中填写，服务端会加密保存。每位成员使用自己的密钥和预算。
+API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的“设置 → AI 服务与预算”中填写，服务端会加密保存。每位成员使用自己的密钥和预算。个人服务商 API Key 无需添加到 Vercel 或 GitHub，已有 AI_KEY_ENCRYPTION_SECRET 保持不变。详细开通与错误处理见 [AI 配置逐步指南](ai-setup.md)。
 
 ### DeepSeek：用于文本反馈
 
 1. 打开 [DeepSeek 开放平台](https://platform.deepseek.com/)，注册并登录。
 2. 进入 **API Keys** 创建一个给 JiawenLex 使用的 key。是否需充值、充值金额由你在平台确认；本指南不承诺免费调用。
 3. JiawenLex → 设置 → 文本反馈：服务商选 **DeepSeek**，把 key 填入 **API Key**，点“保存密钥”。
-4. 设置月度预算，例如先设 `10` 元，再打开 AI 开关，点“保存 AI 开关与预算”。这是应用内的费用估算阈值，最终费用以平台账单为准。
-5. 用一篇短作文主动提交一次，确认数据发送提示、批注和费用记录。普通学习功能可一直关闭 AI。
+4. 点“检查连接”：仅查询模型信息和可用余额状态，不发送作文或录音、不请求文本生成。检查通过不代表实际生成权限或费用已验证。若提示余额不足，可暂时保持 AI 关闭。
+5. 设置月度预算，例如先设 `10` 元，再打开 AI 开关，点“保存 AI 开关与预算”。这是应用内的费用估算阈值，最终费用以平台账单为准。
+6. 用一篇短作文主动提交一次，确认数据发送提示、批注和费用记录。普通学习功能可一直关闭 AI。
 
 当前调用 `deepseek-flash`，以非思考模式生成 JSON 反馈。参考 [接口说明](https://api-docs.deepseek.com/api/create-chat-completion/)、[当前价格](https://api-docs.deepseek.com/quick_start/pricing/)。
 
@@ -48,7 +49,8 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 2. **当前 JiawenLex 接入的是“华北2（北京）”**。在控制台选择该地域，进入 API Key 页面创建 key，并选择所属业务空间。北京以外的 key 不要填入当前接入方式。
 3. 在业务空间管理页面复制 **Workspace ID**。它是空间编号，不能用 APP ID、账号 ID 或 API Key 替代。
 4. JiawenLex → 设置 → 录音转写：填写该 Workspace ID 和 API Key，点“保存密钥”。文本服务如改用 Qwen，也在“文本反馈”框内分别保存这两项。
-5. 录制一段约 10 秒的英语，选择是否保留录音，再确认发送进行转写。检查文字、反馈、预算提示以及默认不保存原音的行为。
+5. 点“检查连接”，先确认密钥和模型信息可访问。使用按量付费 key；Coding Plan / Token Plan 专用密钥不适用于当前接入。模型信息检查不会发起转写，实际权限仍需提交后确认。
+6. 录制一段约 10 秒的英语，选择是否保留录音，再确认发送进行转写。检查文字、反馈、预算提示以及默认不保存原音的行为。
 
 步骤依据 [获取 key](https://help.aliyun.com/zh/model-studio/get-api-key/)、[获取 Workspace ID](https://help.aliyun.com/zh/model-studio/obtain-the-app-id-and-workspace-id)、[地域规则](https://help.aliyun.com/zh/model-studio/regions)。免费额度、模型权限和到期后的费用以你控制台显示为准。
 
@@ -95,10 +97,18 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 - 应用预检查是额外保护，无法控制其他工具、同账号其他 bucket 的用量，也不能代替供应商的 0 元限制。并发写入有可能发生在同一次预检查之后；供应商限额是防止计费的最终控制。
 - 在免费配置下，超过下载或请求限制可能导致校验 / 恢复暂停。保持 0 元限制，确认额度恢复后再重试；没有完成完整性校验的快照不标记成功。
 
-当前还没有 B2 账号或真实存储凭据，因此未实际设置供应商限额、未执行真实备份。应用限制已加入代码，并通过本机 13 项模拟检查及 TypeScript 检查。确认 Vercel 已部署包含这些限制的版本，并完成上述配置后，才能在线生效。
+2026-09-29 用户截图已确认 B2 账号创建完成：存储上限 $0 / 10 GB，下载上限 $0 / 每天 1 GB，Class B 与 C 各每天最多 2,500 次，邮件提醒已勾选。私有 bucket `jiawenlex-backups-chengyibo48` 已创建，Endpoint 为 `s3.us-west-004.backblazeb2.com`，加密已开启、Object Lock 已关闭、生命周期为保留全部版本。本机六项备份配置已填写。真实 B2 检查通过：HeadBucket、全部历史版本清单（当前 0 字节）、103 字节随机检查内容的加密上传、下载解密一致性检查，以及按版本删除；复查确认无检查文件残留。检查不包含数据库或学习内容。线上与 GitHub 工作流凭据、数据库连接、完整备份和恢复仍待完成。应用限制已加入代码，并通过本机 13 项模拟检查及 TypeScript 检查；含这些限制的 Vercel 部署已成功。
 
+
+2026-09-29 用户报告已添加线上备份变量并重新部署。对应 Vercel 部署 `44dSp73tCwVpTHQrvJamydtDgdGu`（代码 `89c1499`）状态 success；正式首页 HTTP 200，未登录访问 `/api/admin/status` 返回 401。以上验证部署与登录保护，未读取线上密钥或确认后台六项配置；线上实际 B2 调用与完整备份仍待验收。下一步填写本机 `DATABASE_URL`，再配置 GitHub Actions secrets。
 
 ## 4. 启用每周备份与每日任务
+
+2026-09-29 本机 `DATABASE_URL` 已填写并完成密码字符编码。使用隔离的临时 Psycopg 3.3.6 客户端，连接到用户指定的 Session pooler，SSL required 模式连接成功；只读事务状态 on，PostgreSQL 17.6，状态查询通过。未运行 pg_dump、完整备份或恢复。本机 pg_dump / pg_restore / psql 仍未安装；每周备份将使用工作流内的 PostgreSQL 17 客户端。用户报告 GitHub Actions 九项 Secrets 已添加；自动审批拒绝从本机 Git 登录机制获取凭据，相关操作未执行，也不通过其他来源重试。
+
+首次备份运行 `36547086688` / job `109335976884`（main，89c1499）已在 GitHub 显示 success。日志确认快照 `snapshots/2026-09-29T09-09-14-819Z-fb2621e1/` 上传及内部完整性校验通过，附件 0 个。B2 只读清单确认 database.jlex 500,784 字节、manifest.jlex 265 字节、verified.jlex 148 字节。但用本机当前 BACKUP_ENCRYPTION_SECRET 解密清单失败（AES-GCM authentication failure）；启动环境与本机文件值一致，且已排除该备份密钥带空格、换行、引号、整行变量名等常见复制格式差异。因此首次完整备份尚未通过独立恢复准备验收，需要用户将 GitHub 同名 Secret 重新填为本机现有值，再重跑并复核；Vercel 的同名配置也须使用相同值。当前快照未修改或删除，不尝试其他服务凭据，不执行真实恢复。
+
+2026-09-29 用户重新填写 GitHub 的 BACKUP_ENCRYPTION_SECRET 后，通过已连接的 GitHub 应用重跑同一运行（36547086688，第二次 job 109342468418），全部步骤 success。新快照 snapshots/2026-09-29T09-27-07-915Z-1c196ace/ 已通过本机独立只读复核：使用本机现有密钥成功解密 manifest、verified 标记和数据库；清单结构、标记指纹、数据库字节长度与 SHA-256 均一致，数据库头为 PostgreSQL custom archive（PGDMP）。数据库明文长度 500,751 字节，附件 0 个；此次下载共 501,197 字节，明文仅在内存中使用。B2 全部历史版本总占用 1,002,394 字节，低于应用 8,000,000,000 字节上限。第一次无法用本机密钥解密的旧快照仍保留，未修改；不能将它计为已通过独立复核的恢复点。每周工作流的既有计划为星期日 02:00 UTC（北京时间星期日 10:00）。Vercel 的同名密钥是否一致尚未独立确认；完整隔离恢复演练、真实附件恢复和删除记录重放验收仍待执行，以上完整性复核不能代替这些验收。
 
 ### 每周备份：在 GitHub 执行
 
@@ -108,6 +118,8 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 4. 保存第一次成功的时间与快照前缀，安排下面的真实恢复演练。GitHub 的定时任务可能延迟，应定期查看实际运行记录。
 
 ### 每日提醒与一年清理：在 Supabase 调度
+
+2026-09-29 用户确认 Vercel 的 BACKUP_ENCRYPTION_SECRET 已同步本机值并重新部署。GitHub 中对应部署 AtUkmvSvJpFygrizHEfyuVTjKt1t（89c1499）状态 success；正式首页 HTTP 200，未登录管理员接口 HTTP 401。没有读取线上备份密钥，密钥一致性依据用户配置确认。启用 pg_cron 1.6.4、pg_net 0.20.4，使用参数化数据库客户端将现有本机 CRON_SECRET 与线上根地址保存到 Vault；本机值一致性复核通过，未输出密钥。按仓库 supabase/cron.sql 建立两个任务：jiawenlex-reminders 每 15 分钟运行，jiawenlex-retention 每日 03:15 GMT（北京时间 11:15）运行，均 active。Vault 解密视图对 anon/authenticated 不可读；cron.job 已启用 RLS，既有策略限制 username=CURRENT_USER，两个任务由 postgres 所有。当前 1 个活动成员，提醒开启人数 0，所有清理条件对应记录数 0。分别通过本机及数据库 pg_net 发起受保护接口检查；Supabase 请求 1/2 均 HTTP 200、无超时、无错误，reminders 返回 sent=0/failed=0，retention 返回 purged=0/draftsPurged=0/sessionsPurged=0。此验证不包含真实邮件发送、过期数据删除、附件恢复或删除记录重放；成员提醒偏好保持关闭。
 
 网站、QQ SMTP、独立备份存储均就绪后：
 
@@ -151,5 +163,5 @@ pnpm services:check --connect
 | 个人 AI 文本／转写实际调用 | 待创建账号并在设置保存 key |
 | 正式网站与管理员登录 | 已部署；公开页面检查通过，用户确认登录成功 |
 | 邮件收件与登录回跳 | SMTP 连接通过；真实邮件流程待验收 |
-| 每日提醒与一年清理调度 | 未启用；待独立备份和调度配置 |
-| 独立加密备份、真实恢复演练 | 待存储、数据库连接及恢复项目 |
+| 每日提醒与一年清理调度 | 已启用；Supabase 到正式网站两个接口 HTTP 200、无超时；真实邮件收件和过期数据清理仍待验收 |
+| 独立加密备份、真实恢复演练 | 第二次备份 success，本机解密及完整性复核通过；用户确认 Vercel 密钥同步并重新部署；完整隔离恢复仍待验收 |

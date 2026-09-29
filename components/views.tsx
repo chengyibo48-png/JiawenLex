@@ -69,6 +69,7 @@ import { Modal } from "./modal";
 import { mergeProfileDraft } from "@/lib/profile-draft";
 import type { ServiceStatus } from "@/lib/service-status";
 import { clearUserDrafts } from "@/lib/offline-drafts";
+import { AiSettings } from "./ai-settings";
 
 export interface ViewActions {
   microTarget?: { topic?: string; unitKey?: string; requestId: string } | null;
@@ -2352,15 +2353,6 @@ export function SettingsView({
 }: Props & { onLogout: (scope?: "local" | "global") => Promise<void> }) {
   const lang = data.profile.language;
   const [draft, setDraft] = useState(data.profile);
-  const [provider, setProvider] = useState<"deepseek" | "qwen">("deepseek");
-  const [textKey, setTextKey] = useState("");
-  const [asrKey, setAsrKey] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [asrWorkspaceId, setAsrWorkspaceId] = useState("");
-  const [keyStatus, setKeyStatus] = useState<{
-    text: boolean;
-    asr: boolean;
-  } | null>(null);
   const previousProfile = useRef(data.profile);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const settingsLock = useRef(false);
@@ -2369,24 +2361,6 @@ export function SettingsView({
     setDraft((current) => mergeProfileDraft(current, previous, data.profile));
     previousProfile.current = data.profile;
   }, [data.profile]);
-  useEffect(() => {
-    if (!actions.client) return;
-    void apiFetch(actions.client, "/api/ai/config")
-      .then((value) => {
-        const config = value as {
-          provider?: "deepseek" | "qwen";
-          text?: boolean;
-          asr?: boolean;
-          workspaceId?: string;
-          asrWorkspaceId?: string;
-        };
-        setProvider(config.provider ?? "deepseek");
-        setKeyStatus({ text: !!config.text, asr: !!config.asr });
-        setWorkspaceId(config.workspaceId ?? "");
-        setAsrWorkspaceId(config.asrWorkspaceId ?? "");
-      })
-      .catch(() => undefined);
-  }, [actions.client]);
 
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault();
@@ -2460,57 +2434,6 @@ export function SettingsView({
     } finally {
       settingsLock.current = false;
       setSettingsBusy(false);
-    }
-  }
-
-  async function saveKey(kind: "text" | "asr") {
-    try {
-      const key = kind === "text" ? textKey : asrKey;
-      if (!key.trim()) return;
-      await apiFetch(actions.client, "/api/ai/config", {
-        method: "POST",
-        body: JSON.stringify({
-          kind,
-          provider: kind === "text" ? provider : "qwen-asr",
-          key: key.trim(),
-          workspaceId:
-            kind === "asr"
-              ? asrWorkspaceId.trim()
-              : provider === "qwen"
-                ? workspaceId.trim()
-                : "",
-        }),
-      });
-      setKeyStatus((previous) => ({
-        text: kind === "text" ? true : !!previous?.text,
-        asr: kind === "asr" ? true : !!previous?.asr,
-      }));
-      kind === "text" ? setTextKey("") : setAsrKey("");
-      actions.notify(t(lang, "密钥已加密保存", "Key saved securely"));
-    } catch (error) {
-      actions.notify(error instanceof Error ? error.message : "保存失败");
-    }
-  }
-
-  async function deleteKey(kind: "text" | "asr") {
-    if (
-      !window.confirm(
-        t(lang, "确定删除该服务密钥？", "Delete this provider key?"),
-      )
-    )
-      return;
-    try {
-      await apiFetch(actions.client, "/api/ai/config", {
-        method: "DELETE",
-        body: JSON.stringify({ kind }),
-      });
-      setKeyStatus((previous) => ({
-        text: kind === "text" ? false : !!previous?.text,
-        asr: kind === "asr" ? false : !!previous?.asr,
-      }));
-      actions.notify(t(lang, "密钥已删除", "Key deleted"));
-    } catch (error) {
-      actions.notify(error instanceof Error ? error.message : "删除失败");
     }
   }
 
@@ -2709,163 +2632,7 @@ export function SettingsView({
           </button>
         </form>
       </section>
-      <section className="card">
-        <div className="card-top">
-          <div>
-            <h3>{t(lang, "AI 服务与预算", "AI providers and budget")}</h3>
-            <p className="muted small">
-              {t(
-                lang,
-                "仅在你主动提交内容时发送到所选服务商。费用由你的服务商账号结算。",
-                "Content is sent to your chosen provider only when you submit. Your provider bills your account.",
-              )}
-            </p>
-          </div>
-        </div>
-        <label className="switch-row">
-          <span>{t(lang, "启用 AI 反馈", "Enable AI feedback")}</span>
-          <input
-            type="checkbox"
-            checked={draft.ai_enabled}
-            onChange={(event) =>
-              setDraft({ ...draft, ai_enabled: event.target.checked })
-            }
-          />
-        </label>
-        <label>
-          {t(
-            lang,
-            "月度预算（人民币，启用 AI 时必填）",
-            "Monthly budget in CNY (required for AI)",
-          )}
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={draft.monthly_budget_cny ?? ""}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                monthly_budget_cny: event.target.value
-                  ? Number(event.target.value)
-                  : null,
-              })
-            }
-          />
-        </label>
-        <button
-          className="button secondary"
-          disabled={settingsBusy}
-          onClick={() => void saveAiPreference()}
-        >
-          {t(lang, "保存 AI 开关与预算", "Save AI preference")}
-        </button>
-        <p className="muted small">
-          {t(
-            lang,
-            "当前百炼接入华北2（北京）。请使用同一北京业务空间的 Workspace ID 与 API Key。",
-            "Model Studio currently uses Beijing. Use the Workspace ID and API key from the same Beijing workspace.",
-          )}
-        </p>
-        <div className="provider-grid">
-          <div className="provider-box">
-            <strong>{t(lang, "文本反馈", "Text feedback")}</strong>
-            <p>
-              {t(lang, "写作、口语建议与批注", "Writing and speaking feedback")}
-            </p>
-            <label>
-              {t(lang, "服务商", "Provider")}
-              <select
-                value={provider}
-                onChange={(event) =>
-                  setProvider(event.target.value as typeof provider)
-                }
-              >
-                <option value="deepseek">DeepSeek</option>
-                <option value="qwen">阿里云百炼 Qwen</option>
-              </select>
-            </label>
-            {provider === "qwen" && (
-              <label>
-                Workspace ID
-                <input
-                  value={workspaceId}
-                  onChange={(event) => setWorkspaceId(event.target.value)}
-                />
-              </label>
-            )}
-            <label>
-              API Key
-              <input
-                type="password"
-                autoComplete="off"
-                value={textKey}
-                onChange={(event) => setTextKey(event.target.value)}
-                placeholder={keyStatus?.text ? "•••••• 已保存" : "sk-…"}
-              />
-            </label>
-            <div className="button-row">
-              <button
-                className="button secondary"
-                onClick={() => void saveKey("text")}
-              >
-                {t(lang, "保存密钥", "Save key")}
-              </button>
-              {keyStatus?.text && (
-                <button
-                  className="text-link danger-text"
-                  onClick={() => void deleteKey("text")}
-                >
-                  {t(lang, "删除", "Delete")}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="provider-box">
-            <strong>{t(lang, "录音转写", "Speech transcription")}</strong>
-            <p>
-              {t(
-                lang,
-                "阿里云百炼 Paraformer",
-                "Alibaba Model Studio Paraformer",
-              )}
-            </p>
-            <label>
-              Workspace ID
-              <input
-                value={asrWorkspaceId}
-                onChange={(event) => setAsrWorkspaceId(event.target.value)}
-              />
-            </label>
-            <label>
-              API Key
-              <input
-                type="password"
-                autoComplete="off"
-                value={asrKey}
-                onChange={(event) => setAsrKey(event.target.value)}
-                placeholder={keyStatus?.asr ? "•••••• 已保存" : "sk-…"}
-              />
-            </label>
-            <div className="button-row">
-              <button
-                className="button secondary"
-                onClick={() => void saveKey("asr")}
-              >
-                {t(lang, "保存密钥", "Save key")}
-              </button>
-              {keyStatus?.asr && (
-                <button
-                  className="text-link danger-text"
-                  onClick={() => void deleteKey("asr")}
-                >
-                  {t(lang, "删除", "Delete")}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
+      <AiSettings draft={draft} onChangeDraft={setDraft} saving={settingsBusy} onSavePreference={saveAiPreference} client={actions.client} notify={actions.notify} />
       <section className="card">
         <h3>{t(lang, "账号与会话", "Account and sessions")}</h3>
         <div className="button-row">
