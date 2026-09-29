@@ -1,7 +1,15 @@
 export type Skill = "reading" | "listening" | "writing" | "speaking";
 export type Track = "academic" | "general";
 export type Language = "zh" | "en";
-export type View = "today" | "practice" | "vocabulary" | "plan" | "library" | "progress" | "settings" | "admin";
+export type View =
+  | "today"
+  | "practice"
+  | "vocabulary"
+  | "plan"
+  | "library"
+  | "progress"
+  | "settings"
+  | "admin";
 
 export interface Profile {
   id: string;
@@ -27,6 +35,8 @@ export interface Profile {
 }
 
 export interface StudyTask {
+  review_attempt_id?: string | null;
+  question_id?: string | null;
   id: string;
   owner_id: string;
   week_start: string;
@@ -42,6 +52,9 @@ export interface StudyTask {
 }
 
 export interface Question {
+  choices?: string[];
+  checklist?: string[];
+  evidence?: import("./review").Evidence;
   id: string;
   type: string;
   prompt: string;
@@ -51,6 +64,16 @@ export interface Question {
 }
 
 export interface Material {
+  revision?: number;
+  updated_at?: string;
+  collection_title?: string;
+  set_title?: string;
+  part_title?: string;
+  sort_order?: number;
+  training_kind?: import("./micro-training").TrainingKind;
+  training_minutes?: number;
+  training_topics?: string[];
+  audio_segments?: import("./review").AudioSegment[];
   id: string;
   owner_id: string;
   visibility: "private" | "shared";
@@ -82,6 +105,9 @@ export interface Feedback {
 }
 
 export interface Attempt {
+  material_revision?: number;
+  learning_kind?: import("./review").LearningKind;
+  answer_exposed?: boolean;
   id: string;
   owner_id: string;
   material_id: string | null;
@@ -116,6 +142,7 @@ export interface VocabularyWord {
 }
 
 export interface WritingDraft {
+  material_revision?: number;
   id: string;
   owner_id: string;
   material_id: string;
@@ -157,12 +184,19 @@ export interface UsageRecord {
 }
 
 export interface WorkspaceData {
+  microDrafts?: WritingDraft[];
+  microAttempts?: import("./micro-training").MicroAttempt[];
+  materialVersions?: import("../components/material-organization").MaterialVersion[];
+  attemptReviews?: import("./review").AttemptReview[];
+  vocabularySources?: import("./review").VocabularySource[];
+  spellingSessions?: import("./review").SpellingSession[];
   profile: Profile;
   tasks: StudyTask[];
   materials: Material[];
   words: VocabularyWord[];
   attempts: Attempt[];
   drafts: WritingDraft[];
+  practiceSessions?: import("./practice-sessions").PracticeSession[];
   shares: ShareGrant[];
   comments: ShareComment[];
   members: Member[];

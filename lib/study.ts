@@ -9,15 +9,19 @@ export const skillLabels: Record<Skill | "vocabulary", { zh: string; en: string 
   vocabulary: { zh: "词汇", en: "Vocabulary" },
 };
 
-export function localDate(date = new Date()): string {
+export function localDate(date = new Date(), timezone?: string): string {
+  if (timezone) {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+    return ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)!.value).join("-");
+  }
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
 
-export function startOfWeek(date = new Date()): string {
-  const copy = new Date(date);
+export function startOfWeek(date = new Date(), timezone?: string): string {
+  const copy = timezone ? new Date(localDate(date, timezone) + "T12:00:00") : new Date(date);
   copy.setDate(copy.getDate() - ((copy.getDay() + 6) % 7));
   return localDate(copy);
 }
@@ -43,7 +47,7 @@ export function dueWords(words: VocabularyWord[]): VocabularyWord[] {
 
 export function weakSkills(attempts: Attempt[]): Skill[] {
   const scored = skills.map((skill) => {
-    const relevant = attempts.filter((a) => a.skill === skill);
+    const relevant = attempts.filter((a) => a.skill === skill && ((skill !== "reading" && skill !== "listening") || a.learning_kind === "first"));
     if (skill === "reading" || skill === "listening") {
       const items = relevant.reduce((sum, a) => sum + (a.question_count ?? 0), 0);
       const correct = relevant.reduce((sum, a) => sum + (a.correct_count ?? 0), 0);
@@ -58,7 +62,8 @@ export function weakSkills(attempts: Attempt[]): Skill[] {
 }
 
 export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], existing: StudyTask[], now = new Date()): StudyTask[] {
-  const week = startOfWeek(now);
+  const calendarNow = new Date(localDate(now, profile.timezone) + "T12:00:00");
+  const week = startOfWeek(calendarNow);
   const preserved = existing.filter((task) => task.week_start === week && (task.status !== "todo" || task.source !== "rule"));
   const priorities = weakSkills(attempts);
   const order: (Skill | "vocabulary")[] = profile.track === "general" ? ["vocabulary"] : ["reading", "listening", "writing", "speaking", "vocabulary"];
@@ -68,7 +73,7 @@ export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], exist
   const available = remaining;
   const weights = order.map((skill) => ({ skill, weight: (skill === "vocabulary" ? 0.8 : 1) + (priorities.includes(skill as Skill) ? 0.5 : 0) }));
   const totalWeight = weights.reduce((sum, item) => sum + item.weight, 0);
-  const today = now;
+  const today = calendarNow;
   const daysLeft = 7 - ((today.getDay() + 6) % 7);
   const newTasks: StudyTask[] = [];
   for (const [index, item] of weights.entries()) {
@@ -111,10 +116,10 @@ export function groupAttemptHistory(attempts: Attempt[]): { recent: Attempt[]; a
   return { recent, archived };
 }
 
-export function daysUntil(date: string | null): number | null {
+export function daysUntil(date: string | null, timezone?: string): number | null {
   if (!date) return null;
-  const target = new Date(`${date}T12:00:00`).getTime();
-  const current = new Date(`${localDate()}T12:00:00`).getTime();
+  const target = new Date(`${date}T00:00:00Z`).getTime();
+  const current = new Date(`${localDate(new Date(), timezone)}T00:00:00Z`).getTime();
   return Math.max(0, Math.ceil((target - current) / 86400000));
 }
 

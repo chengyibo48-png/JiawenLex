@@ -10,3 +10,5 @@ supabase/.temp/
 *.log
 backups
 JiawenLex-source.zip
+
+.qa-browser/

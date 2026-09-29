@@ -9,45 +9,191 @@ export async function GET(request: Request) {
   try {
     requireCron(request);
     const admin = getAdminClient();
-    const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: oldAttempts, error } = await admin.from("practice_attempts").select("id,owner_id,recording_path").lt("submitted_at", cutoff).is("purged_at", null).limit(100);
+    const cutoff = new Date(
+      Date.now() - 365 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const { data: oldAttempts, error } = await admin
+      .from("practice_attempts")
+      .select("id,owner_id,recording_path")
+      .lt("submitted_at", cutoff)
+      .is("purged_at", null)
+      .limit(100);
     if (error) throw error;
     for (const attempt of oldAttempts ?? []) {
-      await recordTombstone({ entity: "purged_attempt", entityId: attempt.id, ownerId: attempt.owner_id, at: new Date().toISOString() });
-      if (attempt.recording_path) { const { error } = await admin.storage.from("study-audio").remove([attempt.recording_path]); if (error) throw error; }
-      const { error: updateError } = await admin.from("practice_attempts").update({ answer_body: null, feedback: null, transcript: null, recording_path: null, saved_recording: false, purged_at: new Date().toISOString() }).eq("id", attempt.id);
+      await recordTombstone({
+        entity: "purged_attempt",
+        entityId: attempt.id,
+        ownerId: attempt.owner_id,
+        at: new Date().toISOString(),
+      });
+      if (attempt.recording_path) {
+        const { error } = await admin.storage
+          .from("study-audio")
+          .remove([attempt.recording_path]);
+        if (error) throw error;
+      }
+      const { error: updateError } = await admin
+        .from("practice_attempts")
+        .update({
+          answer_body: null,
+          feedback: null,
+          transcript: null,
+          recording_path: null,
+          saved_recording: false,
+          purged_at: new Date().toISOString(),
+        })
+        .eq("id", attempt.id);
       if (updateError) throw updateError;
-      const { error: ledgerError } = await admin.from("deletion_events").insert({ owner_id: attempt.owner_id, entity: "purged_attempt", entity_id: attempt.id });
+      const { error: ledgerError } = await admin
+        .from("deletion_events")
+        .insert({
+          owner_id: attempt.owner_id,
+          entity: "purged_attempt",
+          entity_id: attempt.id,
+        });
       if (ledgerError) throw ledgerError;
     }
-    const { data: oldDrafts, error: draftError } = await admin.from("writing_drafts").select("id,owner_id,updated_at").lt("updated_at", cutoff).limit(100);
+    const { data: oldDrafts, error: draftError } = await admin
+      .from("writing_drafts")
+      .select("id,owner_id,updated_at")
+      .lt("updated_at", cutoff)
+      .limit(100);
     if (draftError) throw draftError;
     for (const draft of oldDrafts ?? []) {
-      await recordTombstone({ entity: "writing_drafts", entityId: draft.id, ownerId: draft.owner_id, at: new Date().toISOString(), updatedBefore: draft.updated_at });
-      const { error: deleteError } = await admin.from("writing_drafts").delete().eq("id", draft.id).lte("updated_at", draft.updated_at);
+      await recordTombstone({
+        entity: "writing_drafts",
+        entityId: draft.id,
+        ownerId: draft.owner_id,
+        at: new Date().toISOString(),
+        updatedBefore: draft.updated_at,
+      });
+      const { error: deleteError } = await admin
+        .from("writing_drafts")
+        .delete()
+        .eq("id", draft.id)
+        .lte("updated_at", draft.updated_at);
       if (deleteError) throw deleteError;
     }
-    const { data: oldJobs, error: jobsError } = await admin.from("transcription_jobs").select("id,audio_path,save_recording,status").lt("created_at", cutoff).limit(100);
+    const { data: oldSessions, error: sessionsError } = await admin
+      .from("practice_sessions")
+      .select("id,owner_id,updated_at")
+      .lt("updated_at", cutoff)
+      .limit(100);
+    if (sessionsError) throw sessionsError;
+    for (const session of oldSessions ?? []) {
+      await recordTombstone({
+        entity: "practice_sessions",
+        entityId: session.id,
+        ownerId: session.owner_id,
+        at: new Date().toISOString(),
+        updatedBefore: session.updated_at,
+      });
+      const { error } = await admin
+        .from("practice_sessions")
+        .delete()
+        .eq("id", session.id)
+        .lte("updated_at", session.updated_at);
+      if (error) throw error;
+    }
+    const micro = await admin
+      .from("micro_attempts")
+      .select("id,owner_id")
+      .lt("submitted_at", cutoff)
+      .is("purged_at", null)
+      .limit(100);
+    if (micro.error) throw micro.error;
+    for (const row of micro.data ?? []) {
+      await recordTombstone({
+        entity: "purged_micro_attempt",
+        entityId: row.id,
+        ownerId: row.owner_id,
+        at: new Date().toISOString(),
+      });
+      const result = await admin
+        .from("micro_attempts")
+        .update({
+          answer_body: null,
+          self_review: null,
+          unit_snapshot: null,
+          purged_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+      if (result.error) throw result.error;
+    }
+    const microDrafts = await admin
+      .from("micro_sessions")
+      .select("id,owner_id,updated_at")
+      .lt("updated_at", cutoff)
+      .limit(100);
+    if (microDrafts.error) throw microDrafts.error;
+    for (const row of microDrafts.data ?? []) {
+      await recordTombstone({
+        entity: "micro_sessions",
+        entityId: row.id,
+        ownerId: row.owner_id,
+        at: new Date().toISOString(),
+        updatedBefore: row.updated_at,
+      });
+      const result = await admin
+        .from("micro_sessions")
+        .delete()
+        .eq("id", row.id)
+        .lte("updated_at", row.updated_at);
+      if (result.error) throw result.error;
+    }
+    const { data: oldJobs, error: jobsError } = await admin
+      .from("transcription_jobs")
+      .select("id,audio_path,save_recording,status")
+      .lt("created_at", cutoff)
+      .limit(100);
     if (jobsError) throw jobsError;
     for (const job of oldJobs ?? []) {
-      if (job.audio_path) { const { error } = await admin.storage.from("study-audio").remove([job.audio_path]); if (error) throw error; }
-      const { error: deleteError } = await admin.from("transcription_jobs").delete().eq("id", job.id);
+      if (job.audio_path) {
+        const { error } = await admin.storage
+          .from("study-audio")
+          .remove([job.audio_path]);
+        if (error) throw error;
+      }
+      const { error: deleteError } = await admin
+        .from("transcription_jobs")
+        .delete()
+        .eq("id", job.id);
       if (deleteError) throw deleteError;
     }
     const tempCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: abandoned, error: abandonedError } = await admin.from("transcription_jobs").select("id,audio_path,status").eq("save_recording", false).neq("audio_path", "").lt("created_at", tempCutoff).limit(100);
+    const { data: abandoned, error: abandonedError } = await admin
+      .from("transcription_jobs")
+      .select("id,audio_path,status")
+      .eq("save_recording", false)
+      .neq("audio_path", "")
+      .lt("created_at", tempCutoff)
+      .limit(100);
     if (abandonedError) throw abandonedError;
     for (const job of abandoned ?? []) {
-      const { error: removeError } = await admin.storage.from("study-audio").remove([job.audio_path]);
+      const { error: removeError } = await admin.storage
+        .from("study-audio")
+        .remove([job.audio_path]);
       if (removeError) throw removeError;
       if (job.status === "SUCCEEDED") {
-        const { error: cleanupError } = await admin.from("transcription_jobs").update({ audio_path: "" }).eq("id", job.id);
+        const { error: cleanupError } = await admin
+          .from("transcription_jobs")
+          .update({ audio_path: "" })
+          .eq("id", job.id);
         if (cleanupError) throw cleanupError;
         continue;
       }
-      const { error: deleteError } = await admin.from("transcription_jobs").delete().eq("id", job.id);
+      const { error: deleteError } = await admin
+        .from("transcription_jobs")
+        .delete()
+        .eq("id", job.id);
       if (deleteError) throw deleteError;
     }
-    return NextResponse.json({ purged: oldAttempts?.length ?? 0, draftsPurged: oldDrafts?.length ?? 0 });
-  } catch (error) { return apiError(error); }
+    return NextResponse.json({
+      purged: oldAttempts?.length ?? 0,
+      draftsPurged: oldDrafts?.length ?? 0,
+      sessionsPurged: oldSessions?.length ?? 0,
+    });
+  } catch (error) {
+    return apiError(error);
+  }
 }

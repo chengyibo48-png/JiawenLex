@@ -1,13 +1,31 @@
 const DATABASE = "jiawenlex-offline-v1";
 
-type StoredDraft = { iv: Uint8Array; data: ArrayBuffer; updatedAt: string; revision?: string; format?: number };
-export type LocalDraft = { body: string; version: number | null; updatedAt: string; revision: string };
+type StoredDraft = {
+  iv: Uint8Array;
+  data: ArrayBuffer;
+  updatedAt: string;
+  revision?: string;
+  format?: number;
+};
+export type LocalDraft = {
+  body: string;
+  version: number | null;
+  materialRevision?: number;
+  updatedAt: string;
+  revision: string;
+};
 const queues = new Map<string, Promise<unknown>>();
 
 function serial<T>(id: string, work: () => Promise<T>): Promise<T> {
-  const pending = (queues.get(id) ?? Promise.resolve()).catch(() => undefined).then(work);
+  const pending = (queues.get(id) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(work);
   queues.set(id, pending);
-  void pending.finally(() => { if (queues.get(id) === pending) queues.delete(id); }).catch(() => undefined);
+  void pending
+    .finally(() => {
+      if (queues.get(id) === pending) queues.delete(id);
+    })
+    .catch(() => undefined);
   return pending;
 }
 function openDatabase(): Promise<IDBDatabase> {
@@ -15,7 +33,8 @@ function openDatabase(): Promise<IDBDatabase> {
     const request = indexedDB.open(DATABASE, 2);
     request.onupgradeneeded = () => {
       for (const name of ["keys", "drafts", "conflicts"]) {
-        if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name);
+        if (!request.result.objectStoreNames.contains(name))
+          request.result.createObjectStore(name);
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -31,54 +50,120 @@ function requestValue<T>(request: IDBRequest<T>): Promise<T> {
 function committed(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
-    transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error("Local storage failed"));
+    transaction.onabort = transaction.onerror = () =>
+      reject(transaction.error ?? new Error("Local storage failed"));
   });
 }
 async function getKey(database: IDBDatabase): Promise<CryptoKey> {
-  const candidate = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  const candidate = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
   // Reading and creating the device key in ONE transaction prevents races between tabs.
   const transaction = database.transaction("keys", "readwrite");
   const done = committed(transaction);
   const store = transaction.objectStore("keys");
   const request = store.get("device");
   let key = candidate;
-  request.onsuccess = () => { if (request.result) key = request.result; else store.put(candidate, "device"); };
+  request.onsuccess = () => {
+    if (request.result) key = request.result;
+    else store.put(candidate, "device");
+  };
   await done;
   return key;
 }
-function draftId(userId: string, materialId: string) { return `${userId}:${materialId}`; }
-async function decode(database: IDBDatabase, record: StoredDraft): Promise<LocalDraft> {
-  const key = await getKey(database);
-  const text = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(record.iv) }, key, record.data));
-  const payload = record.format === 2 ? JSON.parse(text) : { body: text, version: null };
-  return { ...payload, updatedAt: record.updatedAt, revision: record.revision ?? record.updatedAt };
+function draftId(userId: string, materialId: string) {
+  return `${userId}:${materialId}`;
 }
-export function saveLocalDraft(userId: string, materialId: string, body: string, version: number | null = null): Promise<LocalDraft> {
+async function decode(
+  database: IDBDatabase,
+  record: StoredDraft,
+): Promise<LocalDraft> {
+  const key = await getKey(database);
+  const text = new TextDecoder().decode(
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(record.iv) },
+      key,
+      record.data,
+    ),
+  );
+  const payload =
+    record.format === 2 ? JSON.parse(text) : { body: text, version: null };
+  return {
+    ...payload,
+    updatedAt: record.updatedAt,
+    revision: record.revision ?? record.updatedAt,
+  };
+}
+export function saveLocalDraft(
+  userId: string,
+  materialId: string,
+  body: string,
+  version: number | null = null,
+  materialRevision?: number,
+): Promise<LocalDraft> {
   return serial(draftId(userId, materialId), async () => {
     const database = await openDatabase();
     try {
       const key = await getKey(database);
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify({ body, version })));
-      const record: StoredDraft = { iv, data, updatedAt: new Date().toISOString(), revision: crypto.randomUUID(), format: 2 };
+      const data = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(
+          JSON.stringify({ body, version, materialRevision }),
+        ),
+      );
+      const record: StoredDraft = {
+        iv,
+        data,
+        updatedAt: new Date().toISOString(),
+        revision: crypto.randomUUID(),
+        format: 2,
+      };
       const transaction = database.transaction("drafts", "readwrite");
       const done = committed(transaction);
-      transaction.objectStore("drafts").put(record, draftId(userId, materialId));
+      transaction
+        .objectStore("drafts")
+        .put(record, draftId(userId, materialId));
       await done;
-      return { body, version, updatedAt: record.updatedAt, revision: record.revision! };
-    } finally { database.close(); }
+      return {
+        body,
+        version,
+        materialRevision,
+        updatedAt: record.updatedAt,
+        revision: record.revision!,
+      };
+    } finally {
+      database.close();
+    }
   });
 }
-export function readLocalDraft(userId: string, materialId: string): Promise<LocalDraft | null> {
+export function readLocalDraft(
+  userId: string,
+  materialId: string,
+): Promise<LocalDraft | null> {
   return serial(draftId(userId, materialId), async () => {
     const database = await openDatabase();
     try {
-      const record = await requestValue(database.transaction("drafts", "readonly").objectStore("drafts").get(draftId(userId, materialId))) as StoredDraft | undefined;
+      const record = (await requestValue(
+        database
+          .transaction("drafts", "readonly")
+          .objectStore("drafts")
+          .get(draftId(userId, materialId)),
+      )) as StoredDraft | undefined;
       return record ? await decode(database, record) : null;
-    } finally { database.close(); }
+    } finally {
+      database.close();
+    }
   });
 }
-export function clearLocalDraft(userId: string, materialId: string, expectedRevision?: string): Promise<void> {
+export function clearLocalDraft(
+  userId: string,
+  materialId: string,
+  expectedRevision?: string,
+): Promise<void> {
   return serial(draftId(userId, materialId), async () => {
     const database = await openDatabase();
     try {
@@ -88,56 +173,233 @@ export function clearLocalDraft(userId: string, materialId: string, expectedRevi
       const request = store.get(draftId(userId, materialId));
       request.onsuccess = () => {
         const record = request.result as StoredDraft | undefined;
-        if (record && (!expectedRevision || (record.revision ?? record.updatedAt) === expectedRevision)) store.delete(draftId(userId, materialId));
+        if (
+          record &&
+          (!expectedRevision ||
+            (record.revision ?? record.updatedAt) === expectedRevision)
+        )
+          store.delete(draftId(userId, materialId));
       };
       await done;
-    } finally { database.close(); }
+    } finally {
+      database.close();
+    }
   });
 }
 export async function localDraftIds(userId: string): Promise<string[]> {
   await Promise.allSettled([...queues.values()]);
+  await pruneExpiredLocalData(userId);
   const database = await openDatabase();
   try {
-    const keys = await requestValue(database.transaction("drafts", "readonly").objectStore("drafts").getAllKeys());
-    return keys.map(String).filter((key) => key.startsWith(userId + ":")).map((key) => key.slice(userId.length + 1));
-  } finally { database.close(); }
+    const keys = await requestValue(
+      database
+        .transaction("drafts", "readonly")
+        .objectStore("drafts")
+        .getAllKeys(),
+    );
+    return keys
+      .map(String)
+      .filter((key) => key.startsWith(userId + ":"))
+      .map((key) => key.slice(userId.length + 1));
+  } finally {
+    database.close();
+  }
 }
-export function archiveLocalDraft(userId: string, materialId: string): Promise<void> {
+export function archiveLocalDraft(
+  userId: string,
+  materialId: string,
+): Promise<void> {
   return serial(draftId(userId, materialId), async () => {
     const database = await openDatabase();
     try {
-      const transaction = database.transaction(["drafts", "conflicts"], "readwrite");
+      const transaction = database.transaction(
+        ["drafts", "conflicts"],
+        "readwrite",
+      );
       const done = committed(transaction);
-      const request = transaction.objectStore("drafts").get(draftId(userId, materialId));
+      const request = transaction
+        .objectStore("drafts")
+        .get(draftId(userId, materialId));
       request.onsuccess = () => {
-        if (request.result) transaction.objectStore("conflicts").put(request.result, `${draftId(userId, materialId)}:${crypto.randomUUID()}`);
+        if (request.result)
+          transaction
+            .objectStore("conflicts")
+            .put(
+              request.result,
+              `${draftId(userId, materialId)}:${crypto.randomUUID()}`,
+            );
       };
       await done;
-    } finally { database.close(); }
+    } finally {
+      database.close();
+    }
   });
 }
-export async function conflictCopies(userId: string, materialId: string): Promise<LocalDraft[]> {
+export async function conflictCopies(
+  userId: string,
+  materialId: string,
+): Promise<LocalDraft[]> {
   const database = await openDatabase();
   try {
-    const store = database.transaction("conflicts", "readonly").objectStore("conflicts");
-    const [keys, rows] = await Promise.all([requestValue(store.getAllKeys()), requestValue(store.getAll())]);
-    return await Promise.all(rows.filter((_, index) => String(keys[index]).startsWith(draftId(userId, materialId) + ":")).map((row: StoredDraft) => decode(database, row)));
-  } finally { database.close(); }
+    const store = database
+      .transaction("conflicts", "readonly")
+      .objectStore("conflicts");
+    const [keys, rows] = await Promise.all([
+      requestValue(store.getAllKeys()),
+      requestValue(store.getAll()),
+    ]);
+    return await Promise.all(
+      rows
+        .filter((_, index) =>
+          String(keys[index]).startsWith(draftId(userId, materialId) + ":"),
+        )
+        .map((row: StoredDraft) => decode(database, row)),
+    );
+  } finally {
+    database.close();
+  }
 }
 export async function clearUserDrafts(userId: string): Promise<void> {
-  await Promise.allSettled([...queues.entries()].filter(([key]) => key.startsWith(userId + ":")).map(([, pending]) => pending));
+  await Promise.allSettled(
+    [...queues.entries()]
+      .filter(([key]) => key.startsWith(userId + ":"))
+      .map(([, pending]) => pending),
+  );
   const database = await openDatabase();
   try {
-    const transaction = database.transaction(["drafts", "conflicts"], "readwrite"), done = committed(transaction);
+    const transaction = database.transaction(
+        ["drafts", "conflicts"],
+        "readwrite",
+      ),
+      done = committed(transaction);
     for (const name of ["drafts", "conflicts"]) {
-      const store = transaction.objectStore(name), request = store.openKeyCursor();
+      const store = transaction.objectStore(name),
+        request = store.openKeyCursor();
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return;
-        if (String(cursor.key).startsWith(userId + ":")) store.delete(cursor.key);
+        if (String(cursor.key).startsWith(userId + ":"))
+          store.delete(cursor.key);
         cursor.continue();
       };
     }
     await done;
-  } finally { database.close(); }
+  } finally {
+    database.close();
+  }
+}
+
+/** Archives explicit data without replacing another tab's pending draft. */
+export function archiveLocalValue(
+  userId: string,
+  materialId: string,
+  body: string,
+  version: number,
+): Promise<void> {
+  return serial(draftId(userId, materialId), async () => {
+    const database = await openDatabase();
+    try {
+      const key = await getKey(database),
+        iv = crypto.getRandomValues(new Uint8Array(12));
+      const data = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(JSON.stringify({ body, version })),
+      );
+      const record: StoredDraft = {
+        iv,
+        data,
+        updatedAt: new Date().toISOString(),
+        revision: crypto.randomUUID(),
+        format: 2,
+      };
+      const transaction = database.transaction("conflicts", "readwrite"),
+        done = committed(transaction);
+      transaction
+        .objectStore("conflicts")
+        .put(record, draftId(userId, materialId) + ":" + record.revision);
+      await done;
+    } finally {
+      database.close();
+    }
+  });
+}
+
+/** Enforces the existing one-year policy for encrypted local drafts and copies. */
+async function pruneExpiredLocalData(userId: string): Promise<void> {
+  const database = await openDatabase(),
+    cutoff = Date.now() - 365 * 86400000;
+  try {
+    const transaction = database.transaction(
+        ["drafts", "conflicts"],
+        "readwrite",
+      ),
+      done = committed(transaction);
+    for (const name of ["drafts", "conflicts"]) {
+      const request = transaction.objectStore(name).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (
+          String(cursor.key).startsWith(userId + ":") &&
+          Date.parse((cursor.value as StoredDraft).updatedAt) < cutoff
+        )
+          cursor.delete();
+        cursor.continue();
+      };
+    }
+    await done;
+  } finally {
+    database.close();
+  }
+}
+export async function discardLocalDraft(
+  userId: string,
+  materialId: string,
+): Promise<void> {
+  await clearLocalDraft(userId, materialId);
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction("conflicts", "readwrite"),
+      done = committed(transaction);
+    const request = transaction.objectStore("conflicts").openKeyCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      if (String(cursor.key).startsWith(draftId(userId, materialId) + ":"))
+        cursor.delete();
+      cursor.continue();
+    };
+    await done;
+  } finally {
+    database.close();
+  }
+}
+
+export async function localConflictIds(userId: string): Promise<string[]> {
+  const database = await openDatabase();
+  try {
+    const keys = await requestValue(
+      database
+        .transaction("conflicts", "readonly")
+        .objectStore("conflicts")
+        .getAllKeys(),
+    );
+    return [
+      ...new Set(
+        keys
+          .map(String)
+          .filter((key) => key.startsWith(userId + ":"))
+          .map((key) =>
+            key
+              .slice(userId.length + 1)
+              .split(":")
+              .slice(0, -1)
+              .join(":"),
+          ),
+      ),
+    ];
+  } finally {
+    database.close();
+  }
 }
