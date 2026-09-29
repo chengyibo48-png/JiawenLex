@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {registerHooks} from 'node:module';
+registerHooks({resolve(specifier,context,next){if(specifier==='./lib/brand'&&context.parentURL?.endsWith('/next.config.ts'))return next(specifier+'.ts',context);return next(specifier,context);}});
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -24,4 +26,11 @@ test('Legacy SVG fallback embeds the same final 192px icon',async()=>{
  const image=await fs.readFile(new URL('../public/favicon-192.png',import.meta.url));
  const embedded=svg.match(/data:image\/png;base64,([^"\s]+)/);
  assert.ok(embedded);assert.deepEqual(Buffer.from(embedded[1],'base64'),image);
+});
+
+test('Next image optimizer explicitly permits the versioned brand URL',async()=>{
+ const config=(await import('../next.config.ts')).default;
+ const [pathname,search]=brandAssets.logo.split('?');
+ assert.ok(config.images.localPatterns.some(p=>p.pathname===pathname&&p.search==='?'+search));
+ assert.ok(config.images.localPatterns.some(p=>p.pathname==='/**'&&p.search===''));
 });
