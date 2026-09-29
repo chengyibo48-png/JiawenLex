@@ -4,8 +4,10 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { createClient } from "@supabase/supabase-js";
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { encryptionKey, encrypt, decrypt, hash, snapshotPrefix, validateManifest, validateBytes, assertRecoveryTarget, deletionReplaySql, verifyThenPrune, recoveryTables, recoveryTableData } from "./backup-core.mjs";
+
+import { backupLimits, storedBackupBytes, assertBackupCapacity, removeBackupSnapshot } from "../lib/backup-capacity.ts";
 
 const mode = process.argv[2];
 if (!["backup", "verify", "replay-deletions", "restore-files", "download", "restore-database"].includes(mode)) throw new Error("Usage: node scripts/backup.mjs backup|verify|download|restore-database|replay-deletions|restore-files");
@@ -18,7 +20,17 @@ function supabaseServerKey(prefix = "") {
 const s3 = new S3Client({ endpoint: required("BACKUP_S3_ENDPOINT"), region: required("BACKUP_S3_REGION"), forcePathStyle: true, credentials: { accessKeyId: required("BACKUP_S3_ACCESS_KEY_ID"), secretAccessKey: required("BACKUP_S3_SECRET_ACCESS_KEY") } });
 const bucket = required("BACKUP_S3_BUCKET");
 const key = encryptionKey(required("BACKUP_ENCRYPTION_SECRET"));
-async function put(name, plain) { await s3.send(new PutObjectCommand({ Bucket: bucket, Key: name, Body: encrypt(plain, key), ContentType: "application/octet-stream" })); }
+const limits = backupLimits(process.env);
+let occupiedBytes = null, snapshotWriteBytes = 0;
+async function put(name, plain) {
+  const body = encrypt(plain, key);
+  if (mode === "backup") assertBackupCapacity(snapshotWriteBytes, body.length, limits.snapshotBytes);
+  if (occupiedBytes === null) occupiedBytes = await storedBackupBytes(s3, bucket, limits.versioned);
+  assertBackupCapacity(occupiedBytes, body.length, limits.storageBytes);
+  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: name, Body: body, ContentType: "application/octet-stream" }));
+  occupiedBytes += body.length;
+  if (mode === "backup") snapshotWriteBytes += body.length;
+}
 async function get(name) {
   const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: name }));
   return decrypt(Buffer.from(await object.Body.transformToByteArray()), key);
@@ -85,11 +97,13 @@ async function latestSnapshot() {
 }
 async function backup() {
   const dir = await mkdtemp(join(tmpdir(), "jiawenlex-backup-"));
+  let activePrefix, verified = false;
   try {
     const dumpPath = join(dir, "database.dump");
     await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--file", dumpPath], required("DATABASE_URL"));
     const dump = await readFile(dumpPath);
     const prefix = `snapshots/${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}/`;
+    activePrefix = prefix;
     await put(`${prefix}database.jlex`, dump);
     const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), supabaseServerKey(), { auth: { persistSession: false } });
     const files = [];
@@ -106,14 +120,18 @@ async function backup() {
     const manifest = { version: 2, at: new Date().toISOString(), database: { objectKey: `${prefix}database.jlex`, sha256: hash(dump), bytes: dump.length }, files };
     // Upload, download and verify the new snapshot before it can displace an old one.
     await put(`${prefix}manifest.jlex`, Buffer.from(JSON.stringify(manifest)));
-    await verifyThenPrune(prefix, { verify, snapshots: completeSnapshots, remove: async (previous) => {
-      const keys = (await list(previous)).objects;
-      for (let i = 0; i < keys.length; i += 1000) {
-        const result = await s3.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) } }));
-        if (result.Errors?.length) throw new Error("Backup retention could not remove all expired objects");
-      }
-    } });
+    await verifyThenPrune(prefix, {
+      verify: async (selected) => { await verify(selected); verified = true; },
+      snapshots: completeSnapshots,
+      remove: (previous) => removeBackupSnapshot(s3, bucket, limits.versioned, previous),
+    });
     console.log(`Encrypted snapshot complete: ${prefix}, ${files.length} file(s)`);
+  } catch (error) {
+    if (activePrefix && !verified) {
+      try { await removeBackupSnapshot(s3, bucket, limits.versioned, activePrefix); }
+      catch { console.warn("Incomplete snapshot cleanup failed; existing verified backups were retained. Check storage before retrying."); }
+    }
+    throw error;
   } finally { await cleanTemp(dir); }
 }
 async function readManifest(prefix) {

@@ -1,6 +1,6 @@
 # JiawenLex：把待完成服务配置好
 
-更新：2026-09-29。现有 Supabase 和 QQ SMTP 的连接检查通过。尚缺公开网站、个人 AI 服务、独立备份存储、备份数据库连接和真实恢复项目。
+更新：2026-09-29。正式网站 https://jiawen-lex.vercel.app 已可访问，用户已确认管理员登录成功；线上配置卡显示网站地址、SMTP 与 AI 密钥加密配置齐全。本机 Supabase 和 QQ SMTP 连接检查通过。仍待真实邮件收件与回跳、个人 AI 服务、独立备份存储、备份数据库连接、定时任务及恢复演练。
 
 “配置齐全”只表示设置存在；“连接通过”表示服务接受了连接；“验收通过”需要实际完成邮件、AI 或恢复流程。这三个状态分开记录。
 
@@ -21,7 +21,7 @@
 | `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD`、`SMTP_FROM` | 本机已有 QQ SMTP 配置 |
 | `NEXT_PUBLIC_DEMO_MODE` | 填 `false` |
 
-第一次部署后记下 Vercel 分配的 **Production 网站根地址**，例如 `https://你的项目.vercel.app`。把它填到 Vercel 的 `NEXT_PUBLIC_SITE_URL`，再 **Redeploy**。本机的 `NEXT_PUBLIC_SITE_URL` 保留 localhost，方便本机登录回跳。不要把 `HTTP_PROXY`、`HTTPS_PROXY` 的本机代理地址添加到 Vercel。
+本项目的 **Production 网站根地址** 已确认为 `https://jiawen-lex.vercel.app`。Vercel 的 `NEXT_PUBLIC_SITE_URL` 使用该地址；如果在首次部署前已保存，等待该次部署成功即可，如果在部署后修改，则需 **Redeploy**。本机的 `NEXT_PUBLIC_SITE_URL` 保留 localhost，方便本机登录回跳。不要把 `HTTP_PROXY`、`HTTPS_PROXY` 的本机代理地址添加到 Vercel。
 
 5. Supabase → Authentication → URL Configuration：**Site URL** 填线上根地址；**Redirect URLs** 保留 `http://localhost:3000`，并添加线上根地址。代码的验证与密码恢复回跳目前使用根地址，不需要凭空添加其他路径。
 6. 打开线上地址，用已有管理员账号登录，再检查验证/密码恢复链接是否回到正确的网站。
@@ -54,26 +54,49 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 
 ## 3. 建独立私有备份存储
 
-如果还没有存储，可以选 **Cloudflare R2 Standard**。它提供 S3 接口，当前 Standard 有每月 10 GB-month 存储免费额度，超出免费额度会计费；开通时是否需要绑定支付方式以页面为准。见 [价格](https://developers.cloudflare.com/r2/pricing/)。已有 OSS/COS 等存储也可继续使用，只需填写其 S3 兼容配置。
+这是整个平台共用的系统备份，由网站维护者统一配置一次，普通成员不需要配置。备份包含全体成员的数据库记录和文件，存入维护者控制的独立私有存储，每周生成加密快照并保留最近四份。“独立”指存储服务与 Supabase 分开。备份凭据及解密密钥只交给维护者；持有解密密钥的人有恢复整个平台数据的能力。网站界面的管理员权限仍不提供读取其他成员私有记录的功能。个人 AI 密钥和预算则由每位成员分别配置。
 
-选择 R2 时：
+本项目按“优先免费、达到限额就暂停”的要求，首选 **Backblaze B2 Cloud Storage 免费账号**。前 10 GB 存储免费；费用还可能来自下载等项目，因此不能只限制容量。使用单独的 B2 账号和私有 bucket，不绑定付款方式、不升级付费；进入 Caps & Alerts 核对账号的免费限制。依据 [当前价格](https://www.backblaze.com/cloud-storage/pricing)、[费用上限](https://www.backblaze.com/docs/cloud-storage-data-caps-and-alerts)。
 
-1. 注册 [Cloudflare](https://dash.cloudflare.com/sign-up)，进入 **R2 Object Storage**，按页面开通。
-2. 建名为 `jiawenlex-backups` 的 **Standard** bucket，保持私有；不启用 Public Development URL（r2.dev）或公开自定义域名。
-3. 创建仅限定到该 bucket 的 **Object Read & Write** API token。保存生成的 **Access Key ID** 和 **Secret Access Key**。它们不是 Cloudflare 登录密码，也不是 Supabase key。
-4. 在本机 `.env.local` 填：
+### 第一步：创建免费账号并确认费用限制
 
-```dotenv
-BACKUP_S3_ENDPOINT=https://你的ACCOUNT_ID.r2.cloudflarestorage.com
-BACKUP_S3_REGION=auto
-BACKUP_S3_BUCKET=jiawenlex-backups
-BACKUP_S3_ACCESS_KEY_ID=你的AccessKeyID
-BACKUP_S3_SECRET_ACCESS_KEY=你的SecretAccessKey
-```
+1. 打开 [Backblaze B2](https://www.backblaze.com/cloud-storage)，选择 **Start Free**，注册并完成邮箱验证。选择 B2 Cloud Storage，不选 Computer Backup 或 B2 Overdrive。
+2. 如果页面提示添加付款方式，选择跳过 / 免费试用选项；不要填写银行卡或开通付费订阅。若当前界面必须付款才能继续，停止并核对页面。
+3. 左侧 B2 Cloud Storage → **Caps & Alerts** → **Edit Caps**。对可设置的存储、下载与请求类别取消 **No Cap**，尝试将付费上限设为 **0 美元 / 日**，保存。官方说明修改可能需要 10 分钟生效。若免费账号不能编辑，保留默认免费限制；若拒绝 0，不用最小付费金额替代，把不含密钥的限额区域截图交给维护者核对。
+4. 在账号界面核对实际允许的免费用量，并确认未开通收费功能。Class D（例如事件通知）没有费用上限，不为本项目启用此类功能。网站不会自动提高供应商费用上限。
 
-`BACKUP_ENCRYPTION_SECRET` 已在本机生成，保留原值，并另存一份安全副本；丢失它就无法解密备份。不要给 `deletions/` 前缀设置自动到期删除规则：旧备份恢复时仍要读取这些删除记录。
+### 第二步：私有 bucket 和应用密钥
 
-5. 将上述六个 `BACKUP_*` 变量也添加到 **Vercel**，再部署，使注销、删除和撤销能写入外部删除记录。参考 [R2 key 与 endpoint](https://developers.cloudflare.com/r2/api/tokens/)、[私有 bucket](https://developers.cloudflare.com/r2/buckets/public-buckets/)。
+1. **Buckets → Create a Bucket**，名字可用 `jiawenlex-backups-chengyibo48`（名称须全局唯一），Files 选 **Private**。备份由程序保留最近四份，不为删除记录 `deletions/` 设置到期删除。
+2. 在 bucket 页面复制 **S3 Endpoint**。它通常形如 `s3.us-west-004.backblazeb2.com`；配置时加上 `https://`，使用页面真实值。Region 对应 endpoint 中的地域编号，示例是 `us-west-004`。
+3. **Application Keys → Add a New Application Key**，只授权刚建的 bucket，选 **Read and Write**，文件名前缀留空，以便访问同一 bucket 的 `snapshots/` 与 `deletions/`。不使用账号的 Master Key。记录生成的 **keyID** 与 **applicationKey**，后者只显示一次。
+4. 在本机 `.env.local` 填五项：
+
+| 变量 | 来源 |
+| --- | --- |
+| `BACKUP_S3_ENDPOINT` | 完整 HTTPS S3 Endpoint |
+| `BACKUP_S3_REGION` | Endpoint 对应地域 |
+| `BACKUP_S3_BUCKET` | 实际 bucket 名称 |
+| `BACKUP_S3_ACCESS_KEY_ID` | keyID |
+| `BACKUP_S3_SECRET_ACCESS_KEY` | applicationKey |
+
+`BACKUP_ENCRYPTION_SECRET` 保留本机已有值，另存安全副本；丢失会无法解密备份。不要把任何密钥发到聊天中。
+
+5. 将上述五项及 `BACKUP_ENCRYPTION_SECRET` 添加到 Vercel 的 **Production** 环境，再 Redeploy。密钥和解密密钥选 Secret；endpoint、region、bucket 可选 Config。后续 GitHub 备份使用同一组配置。
+
+依据：[应用密钥](https://www.backblaze.com/docs/cloud-storage-create-and-manage-app-keys)、[设置限额](https://www.backblaze.com/docs/cloud-storage-create-and-manage-caps-and-alerts)。
+
+### 应用容量保护
+
+- 默认总容量上限：**8,000,000,000 字节（8 GB）**；可以用 `BACKUP_MAX_STORAGE_BYTES` 降低，代码拒绝设置得更高。
+- 默认单次备份写入上限：**500,000,000 字节（500 MB）**；可以用 `BACKUP_MAX_SNAPSHOT_BYTES` 降低。这是写入量限制，不是供应商的下载费用限制。
+- 计入加密开销、全部对象和 B2 历史版本。不能核实占用时暂停写入；容量不足时保留已有恢复点，不删除旧备份来强行挤出空间。只有新快照验证成功后，才按既有规则清理超出最近四份范围的旧快照及其全部版本。
+- 失败时尝试清理本次产生的未验证快照；不清理其他快照或删除记录。GitHub 备份工作流串行执行。
+- 应用预检查是额外保护，无法控制其他工具、同账号其他 bucket 的用量，也不能代替供应商的 0 元限制。并发写入有可能发生在同一次预检查之后；供应商限额是防止计费的最终控制。
+- 在免费配置下，超过下载或请求限制可能导致校验 / 恢复暂停。保持 0 元限制，确认额度恢复后再重试；没有完成完整性校验的快照不标记成功。
+
+当前还没有 B2 账号或真实存储凭据，因此未实际设置供应商限额、未执行真实备份。应用限制已加入代码，并通过本机 13 项模拟检查及 TypeScript 检查。确认 Vercel 已部署包含这些限制的版本，并完成上述配置后，才能在线生效。
+
 
 ## 4. 启用每周备份与每日任务
 
@@ -126,5 +149,7 @@ pnpm services:check --connect
 | QQ SMTP 登录连接 | 已通过；本次未发送邮件 |
 | 本机恢复逻辑与现有约束回归 | 已通过 |
 | 个人 AI 文本／转写实际调用 | 待创建账号并在设置保存 key |
-| 线上地址与定时任务 | 待创建 Vercel 项目并部署 |
+| 正式网站与管理员登录 | 已部署；公开页面检查通过，用户确认登录成功 |
+| 邮件收件与登录回跳 | SMTP 连接通过；真实邮件流程待验收 |
+| 每日提醒与一年清理调度 | 未启用；待独立备份和调度配置 |
 | 独立加密备份、真实恢复演练 | 待存储、数据库连接及恢复项目 |

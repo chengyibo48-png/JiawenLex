@@ -2,6 +2,7 @@ import "server-only";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { HttpError } from "./server-auth";
+import { backupLimits, storedBackupBytes, assertBackupCapacity } from "./backup-capacity";
 
 export type Tombstone = { entity: "account" | "member_removed" | "materials" | "practice_attempts" | "vocabulary" | "share_grants" | "writing_drafts" | "purged_attempt" | "provider_key"; entityId: string; ownerId: string; at: string; updatedBefore?: string; keyKind?: "text" | "asr" };
 
@@ -25,5 +26,12 @@ export function encryptBackupBytes(plain: Buffer, key: Buffer): Buffer {
 export async function recordTombstone(event: Tombstone): Promise<void> {
   const { client, bucket, key } = backupClient();
   const id = randomBytes(16).toString("hex");
-  await client.send(new PutObjectCommand({ Bucket: bucket, Key: `deletions/${event.at.slice(0, 10)}/${id}.jlex`, Body: encryptBackupBytes(Buffer.from(JSON.stringify(event)), key), ContentType: "application/octet-stream" }));
+  const body = encryptBackupBytes(Buffer.from(JSON.stringify(event)), key);
+  try {
+    const limits = backupLimits(process.env);
+    assertBackupCapacity(await storedBackupBytes(client, bucket, limits.versioned), body.length, limits.storageBytes);
+  } catch {
+    throw new HttpError(503, "备份容量已达到限额，或暂时无法核实容量，删除或撤销已暂停。请管理员检查备份空间和连接；已有记录不会因此被删除。");
+  }
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: `deletions/${event.at.slice(0, 10)}/${id}.jlex`, Body: body, ContentType: "application/octet-stream" }));
 }
