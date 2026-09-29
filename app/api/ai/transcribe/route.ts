@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { reserveBudget, settleBudget } from "@/lib/ai-budget";
 import { ExpectedProviderConfig, requireProviderConsent } from "@/lib/provider-consent";
+import { ownedRecordingPath } from "@/lib/storage-path";
 import { decryptKey } from "@/lib/key-crypto";
 import { estimatedAsrCostCny } from "@/lib/providers";
 import { providerFailureMessage } from "@/lib/provider-access";
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
     const { userId, profile, admin } = await requireUser(request);
     if (!profile.ai_enabled) throw new HttpError(403, "AI is disabled");
     const input = Input.parse(await request.json());
-    if (!input.path.startsWith(`${userId}/`)) throw new HttpError(403, "Audio access denied");
+    if (!ownedRecordingPath(input.path, userId)) throw new HttpError(403, "Audio access denied");
     const config = await asrKey(admin, userId);
     requireProviderConsent(input.expectedConfig, config, profile.language);
     let key: string;

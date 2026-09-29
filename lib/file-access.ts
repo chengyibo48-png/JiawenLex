@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { HttpError } from "./server-auth";
+import { ownedStoragePath } from "./storage-path";
 import { getAdminClient } from "./supabase";
 
 function secret() {
@@ -36,7 +37,7 @@ export async function accessibleMaterial(userId: string, materialId: string, ses
     admin.from("materials").select("id,owner_id,visibility,approval,file_path,file_kind").eq("id", materialId).maybeSingle(),
   ]);
   if (!profile || profile.status !== "active" || !material?.file_path) throw new HttpError(404, "Attachment unavailable");
-  if (!material.file_path.startsWith(material.owner_id + "/")) throw new HttpError(403, "Attachment ownership mismatch");
+  if (!ownedStoragePath(material.file_path, material.owner_id)) throw new HttpError(403, "Attachment ownership mismatch");
   const { data: grant } = await admin.from("share_grants").select("id").eq("target_type", "material").eq("target_id", materialId).eq("recipient_id", userId).is("revoked_at", null).limit(1).maybeSingle();
   const allowed = material.owner_id === userId || (material.visibility === "shared" && material.approval === "approved") || (profile.role === "admin" && material.visibility === "shared") || !!grant;
   if (!allowed) throw new HttpError(403, "Attachment access denied");

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+import { ownedRecordingPath } from "@/lib/storage-path";
 import { availableMaterial } from "@/lib/micro-server";
 const Feedback = z.object({
   summary: z.string().max(20000),
@@ -35,8 +36,10 @@ export async function POST(request: Request) {
     if (profile.track !== "academic")
       throw new HttpError(403, "Academic training only");
     const input = Input.parse(await request.json());
-    if (input.recording_path && !input.recording_path.startsWith(userId + "/"))
+    if (input.recording_path && !ownedRecordingPath(input.recording_path, userId))
       throw new HttpError(403, "Recording unavailable");
+    if (input.saved_recording !== !!input.recording_path || (input.skill === "writing" && input.recording_path))
+      throw new HttpError(400, "Recording retention choice does not match the attachment");
     const existing = await admin
       .from("practice_attempts")
       .select("id,material_id,skill")
