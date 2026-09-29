@@ -85,6 +85,7 @@ export function Workspace() {
     null,
   );
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [resetFlow, setResetFlow] = useState(false);
   const [practiceSkill, setPracticeSkill] = useState<Skill>("reading");
@@ -102,9 +103,12 @@ export function Workspace() {
   const logoutSubmitting = useRef(false);
 
   const notify = useCallback((message: string) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     setToast(message);
-    window.setTimeout(() => setToast(null), 5000);
+    toastTimer.current = window.setTimeout(() => { setToast(null); toastTimer.current = null; }, 5000);
   }, []);
+
+  useEffect(() => () => { if (toastTimer.current !== null) window.clearTimeout(toastTimer.current); }, []);
 
   const refresh = useCallback(async () => {
     if (demoMode) return;

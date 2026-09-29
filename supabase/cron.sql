@@ -2,6 +2,8 @@
 -- Requires pg_cron and pg_net extensions enabled in the Supabase dashboard.
 -- Execute the whole file in one transaction; a missing setting leaves no partial jobs.
 begin;
+-- Keep net absent from the exposed Data API schemas.
+-- Do not grant members a generic SQL or network forwarding function.
 do $$
 declare site text; token text;
 begin
@@ -27,7 +29,7 @@ select cron.schedule(
 );
 
 select cron.schedule(
-  'jiawenlex-retention', '15 3 * * *',
+  'jiawenlex-retention', '15 */6 * * *',
   $$ select net.http_get(
     url := rtrim((select decrypted_secret from vault.decrypted_secrets where name = 'jiawenlex_site_url'), '/') || '/api/cron/retention',
     headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'jiawenlex_cron_secret')),

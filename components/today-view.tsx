@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, Sparkles } from "lucide-react";
-import { answeredCount } from "@/lib/practice-sessions";
+import { answeredCount, practiceMaterials } from "@/lib/practice-sessions";
 import { daysUntil, dueWords, localDate, skillLabels, skills, startOfWeek } from "@/lib/study";
 import type { StudyTask, WorkspaceData } from "@/lib/types";
 import type { ViewActions } from "./views";
@@ -14,11 +14,12 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
   const [savingTask, setSavingTask] = useState<string | null>(null);
   const pending = tasks.filter((task) => task.owner_id === profile.id && task.planned_date === today && task.status === "todo").sort((a, b) => a.created_at.localeCompare(b.created_at));
   const backlog = tasks.filter((task) => task.owner_id === profile.id && task.planned_date < today && task.status === "todo").sort((a, b) => b.planned_date.localeCompare(a.planned_date));
-  const weekly = tasks.filter((task) => task.owner_id === profile.id && task.week_start === startOfWeek(new Date(), profile.timezone));
+  const weekly = tasks.filter((task) => task.owner_id === profile.id && task.week_start === startOfWeek(new Date(), profile.timezone) && task.status !== "skipped");
   const done = weekly.filter((task) => task.status === "done").length;
   const due = dueWords(words).length, days = daysUntil(profile.target_date, profile.timezone);
-  const resume = profile.track === "academic" ? [...actions.sessions.sessions].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] : undefined;
-  const material = resume && data.materials.find((m) => m.id === resume.material_id);
+  const accessible = practiceMaterials(data);
+  const resume = profile.track === "academic" ? actions.sessions.sessions.filter((session) => session.state.phase === "active" && accessible.some((m) => m.id === session.material_id)).sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] : undefined;
+  const material = resume && accessible.find((m) => m.id === resume.material_id);
   const start = (task: StudyTask) => task.question_id && !task.review_attempt_id ? actions.notify(t(lang,"原练习已删除，无法继续此题复盘。", "Original attempt deleted; this review is unavailable.")) : task.review_attempt_id ? actions.openReview(task.review_attempt_id, task.question_id ?? undefined) : task.skill === "vocabulary" ? actions.setView("vocabulary") : actions.openPractice(task.material_id, task.skill);
   async function updateTask(task: StudyTask, patch: Partial<StudyTask>) {
     if (savingTask || task.status !== "todo") return;

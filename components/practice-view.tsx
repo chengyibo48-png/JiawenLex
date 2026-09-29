@@ -97,8 +97,10 @@ export function PracticeView({
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [pendingAudioPath, setPendingAudioPath] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
   const [submittedText, setSubmittedText] = useState("");
-  const [textProvider, setTextProvider] = useState("AI");
+  const [recordedSeconds, setRecordedSeconds] = useState(0);
+  const recordingStartedAt = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [durationMinutes, setDurationMinutes] = useState(40);
@@ -410,19 +412,6 @@ export function PracticeView({
     };
   }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client]);
 
-  useEffect(() => {
-    if (!actions.client) return;
-    void apiFetch(actions.client, "/api/ai/config")
-      .then((value) => {
-        setTextProvider(
-          (value as { provider?: string }).provider === "qwen"
-            ? "阿里云百炼 Qwen"
-            : "DeepSeek",
-        );
-      })
-      .catch(() => undefined);
-  }, [actions.client]);
-
   useEffect(
     () => () => {
       if (recordedUrl) URL.revokeObjectURL(recordedUrl);
@@ -445,6 +434,7 @@ export function PracticeView({
     setIntensive(false);
     setSessionReady(false);
     setSelectedId(material.id);
+    setFeedbackNotice(null);
     setSkill(material.skill);
     setMode("practice");
     setAnswers({});
@@ -457,6 +447,8 @@ export function PracticeView({
     setTranscriptOpen(false);
     setManualTranscript("");
     setRecordedBlob(null);
+    setRecordedSeconds(0);
+    recordingStartedAt.current = null;
     setRecordedUrl(null);
     setSaveRecording(false);
     setPendingTaskId(null);
@@ -542,10 +534,12 @@ export function PracticeView({
         data.attempts.some(row => row.material_id === selected?.id && row.learning_kind !== "intensive");
       await actions.upsert("practice_attempts", "attempts", {
         ...attempt,
-        ...(selected ? { material_revision: selected.revision ?? 1 } : {}),
+        ...(selected ? { material_revision: attempt.material_revision ?? selected.revision ?? 1 } : {}),
         ...(objective ? { learning_kind: exposed ? "review" : "first", answer_exposed: exposed } : {}),
       });
-      if (selected) {
+      // Production response submission creates its immutable review atomically.
+      // Members cannot write this protected table directly.
+      if (selected && !actions.client) {
         const now = new Date().toISOString();
         await actions.upsert("attempt_reviews", "attemptReviews", {
           id: attempt.id, owner_id: data.profile.id, snapshot: snapshotMaterial(selected),
@@ -631,100 +625,41 @@ export function PracticeView({
     }
   }
 
-  async function requestFeedback(
-    text: string,
-    material: Material,
-    kind: "writing" | "speaking",
-  ): Promise<Feedback | null> {
-    const cacheKey = JSON.stringify([
-      material.id,
-      material.prompt,
-      kind,
-      text,
-      textProvider,
-      lang,
-    ]);
-    if (feedbackCache.current?.key === cacheKey)
-      return feedbackCache.current.feedback;
+  function notifyFeedbackFailure(error: unknown) {
+    const message = error instanceof Error ? error.message : t(lang, "AI 反馈暂时不可用。", "AI feedback is unavailable.");
+    const notice = message + " " + t(lang, "原始作答仍保留。", "Your original answer is retained.");
+    setFeedbackNotice(notice);
+    actions.notify(notice);
+  }
+  async function requestFeedback(text: string, material: Material, kind: "writing" | "speaking"): Promise<Feedback | null> {
+    setFeedbackNotice(null);
     if (!data.profile.ai_enabled || !actions.client) return null;
-    if (
-      !window.confirm(
-        t(
-          lang,
-          `题目和你的作答将发送给 ${textProvider}，可能产生费用。继续？`,
-          `The prompt and your answer will be sent to ${textProvider} and may incur a charge. Continue?`,
-        ),
-      )
-    )
-      return null;
-    const payload = {
-      skill: kind,
-      prompt: material.prompt,
-      answer: text,
-      overrideBudget: false,
-    };
+    let config: { text: boolean; provider: "deepseek" | "qwen"; workspaceId: string; textUpdatedAt: string };
     try {
-      const response = (await apiFetch(actions.client, "/api/ai/feedback", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      })) as { feedback: Feedback; budgetNearlyUsed?: boolean };
-      if (response.budgetNearlyUsed)
-        actions.notify(
-          t(
-            lang,
-            "本月 AI 费用估算已接近预算",
-            "This month's AI estimate is near your budget",
-          ),
-        );
+      config = await apiFetch(actions.client, "/api/ai/config") as typeof config;
+      if (!config.text) throw new Error(t(lang, "请先在设置中保存文本服务密钥。", "Save a text provider key in settings first."));
+    } catch (error) { notifyFeedbackFailure(error); return null; }
+    const expectedConfig = { provider: config.provider, workspaceId: config.workspaceId, updatedAt: config.textUpdatedAt };
+    const cacheKey = JSON.stringify([material.id, material.revision, material.prompt, kind, text, expectedConfig, lang]);
+    if (feedbackCache.current?.key === cacheKey) return feedbackCache.current.feedback;
+    const provider = config.provider === "qwen" ? t(lang, "阿里云百炼 Qwen", "Alibaba Cloud Model Studio Qwen") : "DeepSeek";
+    if (!window.confirm(t(lang, "题目和你的作答将发送给 " + provider + "，可能产生费用。继续？", "The prompt and your answer will be sent to " + provider + " and may incur a charge. Continue?"))) return null;
+    const payload = { skill: kind, prompt: material.prompt, answer: text, overrideBudget: false, expectedConfig };
+    const send = async (overrideBudget: boolean) => {
+      const response = await apiFetch(actions.client, "/api/ai/feedback", { method: "POST", body: JSON.stringify({ ...payload, overrideBudget }) }) as { feedback: Feedback; budgetNearlyUsed?: boolean };
+      if (response.budgetNearlyUsed) actions.notify(t(lang, "本月 AI 费用估算已接近预算", "This month's AI estimate is near your budget"));
       feedbackCache.current = { key: cacheKey, feedback: response.feedback };
       return response.feedback;
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "budget_confirmation_required"
-      ) {
-        if (
-          window.confirm(
-            t(
-              lang,
-              "本月 AI 用量已达到预算。仍要进行这一次调用？",
-              "Your monthly AI estimate reached the budget. Continue with this call?",
-            ),
-          )
-        ) {
-          try {
-            const result = (
-              (await apiFetch(actions.client, "/api/ai/feedback", {
-                method: "POST",
-                body: JSON.stringify({ ...payload, overrideBudget: true }),
-              })) as { feedback: Feedback }
-            ).feedback;
-            feedbackCache.current = { key: cacheKey, feedback: result };
-            return result;
-          } catch {
-            actions.notify(
-              t(
-                lang,
-                "AI 反馈暂时不可用，作答仍会保存。",
-                "AI feedback is unavailable; your answer will still be saved.",
-              ),
-            );
-            return null;
-          }
-        }
-        return null;
+    };
+    try { return await send(false); }
+    catch (error) {
+      if (error instanceof Error && error.message === "budget_confirmation_required") {
+        if (!window.confirm(t(lang, "本月 AI 用量已达到预算。仍要进行这一次调用？", "Your monthly AI estimate reached the budget. Continue with this call?"))) return null;
+        try { return await send(true); } catch (retryError) { notifyFeedbackFailure(retryError); return null; }
       }
-      actions.notify(
-        t(
-          lang,
-          "AI 反馈暂时不可用，作答仍会保存。",
-          "AI feedback is unavailable; your answer will still be saved.",
-        ),
-      );
-      return null;
+      notifyFeedbackFailure(error); return null;
     }
   }
-
   async function finishWriting() {
     if (!selected || !writingText.trim() || submissionLock.current || finished)
       return;
@@ -775,21 +710,21 @@ export function PracticeView({
   }
 
   async function startRecording() {
-    if (busy || recording || pendingTaskId) return;
+    if (busy || recording || pendingTaskId || submissionLock.current) return;
+    submissionLock.current = true;
     setBusy(true);
     try {
+      if (pendingAudioPath && actions.client) {
+        const { error } = await actions.client.storage.from("study-audio").remove([pendingAudioPath]);
+        if (error) throw error;
+        setPendingAudioPath(null);
+      }
       const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.current = media;
       if (!mounted.current) {
         media.getTracks().forEach((track) => track.stop());
         return;
       }
-      setPendingAudioPath(null);
-      setPendingTaskId(null);
-      setFinished(false);
-      setFeedback(null);
-      setManualTranscript("");
-      attemptId.current = null;
-      feedbackCache.current = null;
       const preferred = [
         "audio/webm;codecs=opus",
         "audio/mp4",
@@ -805,8 +740,11 @@ export function PracticeView({
         if (event.data.size) chunks.current.push(event.data);
       };
       instance.onstop = () => {
+        const duration = recordingStartedAt.current === null ? 0 : Math.max(1, Math.ceil((performance.now() - recordingStartedAt.current) / 1000));
+        recordingStartedAt.current = null;
         media.getTracks().forEach((track) => track.stop());
         if (!mounted.current) return;
+        setRecordedSeconds(duration);
         const blob = new Blob(chunks.current, {
           type: instance.mimeType || "audio/webm",
         });
@@ -817,11 +755,30 @@ export function PracticeView({
         });
         setRecording(false);
       };
+      instance.onerror = () => {
+        media.getTracks().forEach((track) => track.stop());
+        if (mounted.current) {
+          setRecording(false);
+          actions.notify(t(lang, "录音中断，请检查设备后重新录制，或手动填写转写。", "Recording interrupted. Check your device and record again, or type a transcript."));
+        }
+      };
       recorder.current = instance;
-      instance.start();
+      instance.start(1000);
+      setFeedbackNotice(null);
+      setPendingAudioPath(null);
+      setPendingTaskId(null);
+      setFinished(false);
+      setFeedback(null);
+      setManualTranscript("");
+      attemptId.current = null;
+      feedbackCache.current = null;
+      setRecordedBlob(null);
+      setRecordedUrl(null);
+      recordingStartedAt.current = performance.now();
+      setRecordedSeconds(0);
       setRecording(true);
       begin();
-    } catch {
+    } catch (error) {
       stream.current?.getTracks().forEach((track) => track.stop());
       actions.notify(
         t(
@@ -831,13 +788,29 @@ export function PracticeView({
         ),
       );
     } finally {
-      setBusy(false);
+      submissionLock.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
 
   function stopRecording() {
     if (recorder.current?.state === "recording") recorder.current.stop();
   }
+
+  useEffect(() => {
+    if (!recording) return;
+    const tick = () => {
+      if (recordingStartedAt.current === null) return;
+      const seconds = Math.floor((performance.now() - recordingStartedAt.current) / 1000);
+      setRecordedSeconds(seconds);
+      if (seconds >= 3600 && recorder.current?.state === "recording") {
+        recorder.current.stop();
+        actions.notify(t(lang, "录音已达到一小时，已自动停止。", "Recording reached one hour and has stopped automatically."));
+      }
+    };
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [recording, lang]);
 
   async function finishSpeaking() {
     if (
@@ -878,11 +851,19 @@ export function PracticeView({
     let transcript = manualTranscript.trim();
     let result: Feedback | null = null;
     try {
+      let transcribe = !!pendingTaskId;
+      let expectedConfig: { provider: "qwen-asr"; workspaceId: string; updatedAt: string } | undefined;
+      if (data.profile.ai_enabled && recordedBlob && !transcript && !pendingTaskId) {
+        const config = await apiFetch(actions.client, "/api/ai/config") as { asr: boolean; asrWorkspaceId: string; asrUpdatedAt: string };
+        if (!config.asr) throw new Error(t(lang, "请先在设置中保存百炼录音转写密钥。", "Save a Model Studio speech key in settings first."));
+        expectedConfig = { provider: "qwen-asr", workspaceId: config.asrWorkspaceId, updatedAt: config.asrUpdatedAt };
+        transcribe = window.confirm(t(lang, "录音将发送给阿里云百炼进行转写，可能产生费用。继续？", "Recording will be sent to Alibaba Cloud Model Studio for transcription and may incur a charge. Continue?"));
+        if (!transcribe && !saveRecording) return;
+      }
       if (
         recordedBlob &&
         actions.client &&
-        ((data.profile.ai_enabled && !manualTranscript.trim()) ||
-          saveRecording) &&
+        (transcribe || saveRecording) &&
         !pendingTaskId &&
         !path
       ) {
@@ -898,21 +879,14 @@ export function PracticeView({
         setPendingAudioPath(path);
       }
       if (data.profile.ai_enabled && (path || pendingTaskId) && !transcript) {
-        if (
-          window.confirm(
-            t(
-              lang,
-              "录音将发送给阿里云百炼进行转写，可能产生费用。继续？",
-              "Recording will be sent to Alibaba Cloud Model Studio for transcription and may incur a charge. Continue?",
-            ),
-          )
-        ) {
+        if (transcribe) {
           let taskId = pendingTaskId;
           if (!taskId) {
             const payload = {
               path,
               saved: saveRecording,
-              durationSeconds: elapsed,
+              durationSeconds: Math.min(3600, Math.max(1, recordedSeconds)),
+              expectedConfig,
               overrideBudget: false,
             };
             try {
@@ -962,6 +936,10 @@ export function PracticeView({
               transcript = polled.transcript ?? "";
               setManualTranscript(transcript);
               setPendingTaskId(null);
+              if (!saveRecording) {
+                path = null;
+                setPendingAudioPath(null);
+              }
               break;
             }
             if (polled.status === "FAILED") {
@@ -1549,7 +1527,7 @@ export function PracticeView({
                   </div>
                   <strong>
                     {recording
-                      ? formatTime(elapsed)
+                      ? formatTime(recordedSeconds)
                       : recordedBlob
                         ? t(lang, "录音已完成", "Recording ready")
                         : t(lang, "准备开始", "Ready when you are")}
@@ -1672,6 +1650,7 @@ export function PracticeView({
               </button>
             </section>
           )}
+          {feedbackNotice && <section className="card" role="status"><h3>{t(lang, "AI 反馈未生成", "AI feedback was not generated")}</h3><p>{feedbackNotice}</p><p className="muted small">{t(lang, "请按练习保存状态查看原始作答；在设置中处理服务配置或额度问题。", "Check the practice save status for your original answer. Resolve provider configuration or quota issues in settings.")}</p></section>}
           {feedback && (
             <section className="card ai-feedback">
               <div className="card-top">

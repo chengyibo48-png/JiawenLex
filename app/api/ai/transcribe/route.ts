@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { reserveBudget, settleBudget } from "@/lib/ai-budget";
+import { ExpectedProviderConfig, requireProviderConsent } from "@/lib/provider-consent";
 import { decryptKey } from "@/lib/key-crypto";
 import { estimatedAsrCostCny } from "@/lib/providers";
 import { providerFailureMessage } from "@/lib/provider-access";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
-import { speechTaskStatus, transcriptUrl, transcriptText, SpeechResultError, type SpeechTaskResult } from "@/lib/speech-result";
+import { speechTaskStatus, transcriptUrl, transcriptText, transcriptDurationSeconds, SpeechResultError, type SpeechTaskResult } from "@/lib/speech-result";
 
-const Input = z.object({ path: z.string().max(240), saved: z.boolean(), durationSeconds: z.number().min(0).max(3600).default(600), overrideBudget: z.boolean().default(false) });
+const Input = z.object({ path: z.string().max(240), saved: z.boolean(), durationSeconds: z.number().min(0).max(3600).default(600), overrideBudget: z.boolean().default(false), expectedConfig: ExpectedProviderConfig.optional() });
 export const maxDuration = 60;
 const workspacePattern = /^[A-Za-z0-9_-]{4,80}$/;
 
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
     const input = Input.parse(await request.json());
     if (!input.path.startsWith(`${userId}/`)) throw new HttpError(403, "Audio access denied");
     const config = await asrKey(admin, userId);
+    requireProviderConsent(input.expectedConfig, config, profile.language);
     let key: string;
     try { key = decryptKey(config.encrypted_key, config.iv); }
     catch { throw new HttpError(503, profile.language === "zh" ? "无法解密语音密钥，请重新保存密钥或联系维护者检查加密配置。" : "The speech key could not be decrypted. Save it again or check server encryption configuration."); }
@@ -100,16 +102,19 @@ export async function GET(request: Request) {
     if (status === "SUCCEEDED") {
       const file = await fetch(transcriptUrl(result), { redirect: "error", signal: AbortSignal.timeout(20000) });
       if (!file.ok) throw new HttpError(502, "Transcript unavailable");
-      const transcript = transcriptText(await file.json());
-      if (job.usage_id) await settleBudget(admin, job.usage_id, Number(job.estimated_cny));
+      const transcriptResult: unknown = await file.json();
+      const transcript = transcriptText(transcriptResult);
+      const actualSeconds = transcriptDurationSeconds(transcriptResult);
+      const estimatedCny = actualSeconds === null ? Number(job.estimated_cny) : estimatedAsrCostCny(actualSeconds);
+      if (job.usage_id) await settleBudget(admin, job.usage_id, estimatedCny);
       else {
         const { error: usageError } = await admin.from("ai_usage").upsert(
-          { owner_id: userId, provider: "qwen-asr", operation: "transcription", reference_id: job.id, estimated_cny: job.estimated_cny },
+          { owner_id: userId, provider: "qwen-asr", operation: "transcription", reference_id: job.id, estimated_cny: estimatedCny },
           { onConflict: "owner_id,provider,operation,reference_id", ignoreDuplicates: true },
         );
         if (usageError) throw usageError;
       }
-      const { error } = await admin.from("transcription_jobs").update({ status: "SUCCEEDED", transcript, completed_at: new Date().toISOString() }).eq("id", job.id);
+      const { error } = await admin.from("transcription_jobs").update({ status: "SUCCEEDED", transcript, estimated_cny: estimatedCny, completed_at: new Date().toISOString() }).eq("id", job.id);
       if (error) throw error;
       // Persist the transcript before deleting audio; a cleanup failure must not lose it.
       if (!job.save_recording) {

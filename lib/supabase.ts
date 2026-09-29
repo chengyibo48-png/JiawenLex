@@ -31,6 +31,25 @@ export function getAdminClient(): SupabaseClient {
   });
 }
 
+// Keyset pagination avoids the API row cap and offset drift as records are added.
+async function visibleRows(client: SupabaseClient, table: string) {
+  const rows = [];
+  let cursor: string | undefined;
+  for (;;) {
+    let query = client.from(table).select("*").order("id", { ascending: true }).limit(500);
+    if (cursor) query = query.gt("id", cursor);
+    const result = await query;
+    if (result.error) throw result.error;
+    const page = result.data ?? [];
+    rows.push(...page);
+    if (!page.length) break;
+    const next = String(page[page.length - 1].id);
+    if (next === cursor) throw new Error("Workspace pagination did not advance");
+    cursor = next;
+  }
+  return { data: rows, error: null };
+}
+
 export async function loadWorkspace(
   client: SupabaseClient,
   userId: string,
@@ -53,7 +72,7 @@ export async function loadWorkspace(
     "micro_attempts",
   ] as const;
   const results = await Promise.all(
-    tables.map((table) => client.from(table).select("*")),
+    tables.map((table) => visibleRows(client, table)),
   );
   const firstError = results.find((result) => result.error)?.error;
   if (firstError) throw firstError;

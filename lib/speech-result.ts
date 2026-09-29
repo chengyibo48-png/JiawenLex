@@ -21,6 +21,10 @@ export function transcriptUrl(result: SpeechTaskResult): URL {
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || !url.hostname.endsWith(".aliyuncs.com")) throw new SpeechResultError("Invalid transcript URL");
   return url;
 }
+export function transcriptDurationSeconds(value: unknown): number | null {
+  const milliseconds = (value as { properties?: { original_duration_in_milliseconds?: unknown } })?.properties?.original_duration_in_milliseconds;
+  return typeof milliseconds === "number" && Number.isFinite(milliseconds) && milliseconds > 0 ? Math.ceil(milliseconds / 1000) : null;
+}
 export function transcriptText(value: unknown): string {
   const parts = (value as { transcripts?: { text?: unknown }[] })?.transcripts;
   if (!Array.isArray(parts) || parts.some((part) => !part || typeof part.text !== "string")) throw new SpeechResultError("Invalid transcript content");

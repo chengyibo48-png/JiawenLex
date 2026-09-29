@@ -69,7 +69,7 @@ export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], exist
   const order: (Skill | "vocabulary")[] = profile.track === "general" ? ["vocabulary"] : ["reading", "listening", "writing", "speaking", "vocabulary"];
   const hours = Math.min(80, Math.max(1, profile.weekly_hours || 1));
   const budget = Math.round(hours * 60);
-  let remaining = Math.max(0, budget - preserved.reduce((sum, task) => sum + task.minutes, 0));
+  let remaining = Math.max(0, budget - preserved.reduce((sum, task) => sum + (task.status === "skipped" ? 0 : task.minutes), 0));
   const available = remaining;
   const weights = order.map((skill) => ({ skill, weight: (skill === "vocabulary" ? 0.8 : 1) + (priorities.includes(skill as Skill) ? 0.5 : 0) }));
   const totalWeight = weights.reduce((sum, item) => sum + item.weight, 0);

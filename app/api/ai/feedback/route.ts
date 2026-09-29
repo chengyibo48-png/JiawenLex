@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { ExpectedProviderConfig, requireProviderConsent } from "@/lib/provider-consent";
 import { decryptKey } from "@/lib/key-crypto";
 import { reserveBudget, settleBudget } from "@/lib/ai-budget";
 import { estimatedTextCostCny, generateFeedback, feedbackInputTokenEstimate, FeedbackRequestError } from "@/lib/providers";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 
-const Input = z.object({ skill: z.enum(["writing", "speaking"]), prompt: z.string().min(1).max(30000), answer: z.string().min(1).max(100000), overrideBudget: z.boolean().default(false) });
+const Input = z.object({ skill: z.enum(["writing", "speaking"]), prompt: z.string().min(1).max(30000), answer: z.string().min(1).max(100000), overrideBudget: z.boolean().default(false), expectedConfig: ExpectedProviderConfig.optional() });
 export const maxDuration = 60;
 
 export async function POST(request: Request) {
@@ -15,7 +16,8 @@ export async function POST(request: Request) {
     const input = Input.parse(await request.json());
     const { data: config, error } = await admin.from("provider_keys").select("*").eq("owner_id", userId).eq("kind", "text").maybeSingle();
     if (error) throw error;
-    if (!config) throw new HttpError(400, "Set a text provider key first");
+    if (!config) throw new HttpError(400, profile.language === "zh" ? "请先在设置中保存文本服务密钥。" : "Save a text provider key in settings first.");
+    requireProviderConsent(input.expectedConfig, config, profile.language);
     let key: string;
     try { key = decryptKey(config.encrypted_key, config.iv); }
     catch { throw new HttpError(503, profile.language === "zh" ? "无法解密已保存密钥，请重新保存密钥或联系维护者检查加密配置。" : "The saved key could not be decrypted. Save it again or check server encryption configuration."); }

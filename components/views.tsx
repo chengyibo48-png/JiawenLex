@@ -477,17 +477,40 @@ export function PlanView({ data, actions }: Props) {
   const lang = data.profile.language;
   const week = startOfWeek(new Date(), data.profile.timezone);
   const current = data.tasks
-    .filter((task) => task.week_start === week)
+    .filter((task) => task.owner_id === data.profile.id && task.week_start === week)
     .sort((a, b) => a.planned_date.localeCompare(b.planned_date));
   const [title, setTitle] = useState("");
   const [skill, setSkill] = useState<Skill | "vocabulary">("reading");
   const [minutes, setMinutes] = useState(30);
-  const [plannedDate, setPlannedDate] = useState(localDate());
+  const [plannedDate, setPlannedDate] = useState(localDate(new Date(), data.profile.timezone));
   const [planBusy, setPlanBusy] = useState(false);
+  const [savingTask, setSavingTask] = useState<string | null>(null);
+  const taskLock = useRef(false);
+
+  async function updateTask(task: StudyTask, patch: Partial<StudyTask>) {
+    if (taskLock.current || task.status === "done") return;
+    taskLock.current = true;
+    setSavingTask(task.id);
+    try {
+      if (actions.client) {
+        const result = await actions.client.from("study_tasks").update(patch).eq("id", task.id).eq("owner_id", data.profile.id).eq("status", task.status).eq("planned_date", task.planned_date).select("id");
+        if (result.error) throw result.error;
+        await actions.refresh();
+        if (!result.data?.length) actions.notify(t(lang, "任务已在其他页面变化，请查看最新状态。", "This task changed elsewhere. Check its latest status."));
+      } else await actions.upsert("study_tasks", "tasks", { ...task, ...patch });
+    } catch (error) { actions.notify(error instanceof Error ? error.message : t(lang, "任务未保存，请重试。", "Task was not saved. Retry.")); }
+    finally { taskLock.current = false; setSavingTask(null); }
+  }
 
   async function addTask(event: React.FormEvent) {
     event.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || taskLock.current || planBusy) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(new Date(plannedDate + "T12:00:00").getTime()) || !Number.isInteger(minutes) || minutes < 10 || minutes > 300) {
+      actions.notify(t(lang, "请填写有效日期和 10–300 的整数分钟数。", "Enter a valid date and a whole number of minutes from 10 to 300."));
+      return;
+    }
+    taskLock.current = true;
+    setSavingTask("new");
     const task: StudyTask = {
       id: crypto.randomUUID(),
       owner_id: data.profile.id,
@@ -498,16 +521,16 @@ export function PlanView({ data, actions }: Props) {
       minutes,
       status: "todo",
       source: "manual",
-      rationale: "手动添加",
+      rationale: t(lang, "手动添加", "Added manually"),
       material_id: null,
       created_at: new Date().toISOString(),
     };
     try {
       await actions.upsert("study_tasks", "tasks", task);
-      setTitle("");
+      setTitle((current) => current.trim() === task.title ? "" : current);
     } catch {
       /* Workspace displays errors. */
-    }
+    } finally { taskLock.current = false; setSavingTask(null); }
   }
 
   return (
@@ -526,7 +549,7 @@ export function PlanView({ data, actions }: Props) {
         </div>
         <button
           className="button secondary"
-          disabled={planBusy}
+          disabled={planBusy || !!savingTask}
           onClick={() => {
             setPlanBusy(true);
             void actions
@@ -550,7 +573,7 @@ export function PlanView({ data, actions }: Props) {
         <div className="card-top">
           <h3>{t(lang, "本周任务", "This week's tasks")}</h3>
           <span className="muted small">
-            {current.reduce((sum, task) => sum + task.minutes, 0)} min
+            {current.reduce((sum, task) => sum + (task.status === "skipped" ? 0 : task.minutes), 0)} min
           </span>
         </div>
         {current.length ? (
@@ -579,31 +602,16 @@ export function PlanView({ data, actions }: Props) {
                     type="date"
                     aria-label={t(lang, "调整日期", "Reschedule")}
                     value={task.planned_date}
-                    disabled={task.status === "done"}
-                    onChange={(event) =>
-                      void actions
-                        .upsert("study_tasks", "tasks", {
-                          ...task,
-                          planned_date: event.target.value,
-                          week_start: startOfWeek(
-                            new Date(event.target.value + "T12:00:00"),
-                          ),
-                        })
-                        .catch(() => undefined)
-                    }
+                    disabled={task.status === "done" || !!savingTask || planBusy}
+                    onChange={(event) => {
+                      if (event.target.value) void updateTask(task, { planned_date: event.target.value, week_start: startOfWeek(new Date(event.target.value + "T12:00:00")) });
+                    }}
                   />
                   <select
                     aria-label={t(lang, "任务状态", "Task status")}
                     value={task.status}
-                    disabled={task.status === "done"}
-                    onChange={(event) =>
-                      void actions
-                        .upsert("study_tasks", "tasks", {
-                          ...task,
-                          status: event.target.value as StudyTask["status"],
-                        })
-                        .catch(() => undefined)
-                    }
+                    disabled={task.status === "done" || !!savingTask || planBusy}
+                    onChange={(event) => void updateTask(task, { status: event.target.value as StudyTask["status"] })}
                   >
                     <option value="todo">{t(lang, "待完成", "To do")}</option>
                     <option value="done">{t(lang, "完成", "Done")}</option>
@@ -701,11 +709,12 @@ export function PlanView({ data, actions }: Props) {
             {t(lang, "日期", "Date")}
             <input
               type="date"
+              required
               value={plannedDate}
               onChange={(event) => setPlannedDate(event.target.value)}
             />
           </label>
-          <button className="button primary" type="submit">
+          <button className="button primary" type="submit" disabled={!!savingTask || planBusy}>
             <Plus size={16} />
             {t(lang, "添加", "Add")}
           </button>
