@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, authenticatedDb, HttpError, requireUser } from "@/lib/server-auth";
-import { canRevisePublishedQuestion, validateSourceQuestion } from "@/lib/source-question";
+import { canRevisePublishedQuestion, sourceExerciseIdentity, validateSourceQuestion } from "@/lib/source-question";
 
 const Update = z.object({
   candidateId: z.string().uuid(),
@@ -166,10 +166,16 @@ export async function PATCH(request: Request) {
     let value: ReturnType<typeof validateSourceQuestion>;
     try { value = validateSourceQuestion(payload, candidate.document_id); }
     catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "题目未通过发布校验"); }
-    const existing = await admin.from("source_review_candidates").select("id").eq("owner_id", userId)
-      .eq("content_kind", "question").eq("status", "published").eq("payload->>prompt", value.prompt).neq("id", candidate.id).limit(1);
-    if (existing.error) throw existing.error;
-    if (existing.data?.length && (payload.duplicate_resolution !== "distinct" || String(payload.duplicate_note ?? "").trim().length < 10)) {
+    const identity = sourceExerciseIdentity(payload);
+    let duplicate = false;
+    for (let offset=0; !duplicate; offset+=100) {
+      const existing = await admin.from("source_review_candidates").select("id,payload").eq("owner_id",userId)
+        .eq("content_kind","question").eq("status","published").eq("payload->>skill",value.skill).neq("id",candidate.id).order("id").range(offset,offset+99);
+      if (existing.error) throw existing.error;
+      duplicate=(existing.data??[]).some(row=>sourceExerciseIdentity(row.payload)===identity);
+      if ((existing.data?.length??0)<100) break;
+    }
+    if (duplicate && (payload.duplicate_resolution !== "distinct" || String(payload.duplicate_note ?? "").trim().length < 10)) {
       throw new HttpError(409, "相同题干已发布；请将新的范文合并为参考答案变体，或说明为何必须单独保留");
     }
     const allRefs = [...value.source_refs, ...value.questions.flatMap((question) => question.source_refs)];

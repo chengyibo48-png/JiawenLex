@@ -1,6 +1,13 @@
 import { z } from "zod";
 
 const uuid = z.string().uuid();
+/** Instructions alone cannot identify a question: many essays use the same rubric. */
+export function sourceExerciseIdentity(input: Record<string, unknown>) {
+  const normalise = (value: unknown): string => typeof value === "string" ? value.normalize("NFKC").trim().replace(/\s+/g," ").toLowerCase() : "";
+  const questions = Array.isArray(input.questions) ? input.questions : [];
+  if (!questions.length || questions.some(q=>!q || typeof q!=="object" || Array.isArray(q))) return "";
+  return JSON.stringify([input.skill,input.track ?? "academic",normalise(input.passage),normalise(input.transcript),input.figureFilePath??"",input.audioFilePath??"",questions.map((q: Record<string,unknown>)=>[normalise(q.prompt),q.answer_mode,q.word_limit??null,q.requires_figure??false,Array.isArray(q.choices)?q.choices.map(normalise):[],normalise(q.answer_limit_text)])]);
+}
 export function canRevisePublishedQuestion(status: string, kind: string, action: string, hasPayload: boolean, expectedRevision?: number) {
   return status === "published" && kind === "question" && action === "publish_question" && hasPayload && Number.isInteger(expectedRevision) && Number(expectedRevision) > 0;
 }

@@ -146,6 +146,7 @@ export const recoveryTables = [
   "study_guides",
   "vocabulary_templates",
   "vocabulary_review_events",
+  "vocabulary_learned_words",
   "word_error_reports",
 ];
 export function recoveryTableData(toc) {

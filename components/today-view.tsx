@@ -6,6 +6,7 @@ import { daysUntil, dueWords, localDate, skillLabels, skills, startOfWeek } from
 import type { StudyTask, WorkspaceData } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { t } from "./workspace";
+import { WeatherWidget } from "./weather-widget";
 
 export function TodayView({ data, actions }: { data: WorkspaceData; actions: ViewActions }) {
   const { profile, tasks, attempts, words } = data, lang = profile.language;
@@ -45,7 +46,7 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
   }
   const primary = pending[0];
   return <div className="page-stack">
-    <div className="welcome-row"><div><h2>{t(lang, `${profile.display_name}，今天从这里开始。`, `Welcome back, ${profile.display_name}.`)}</h2><p>{t(lang, "一次专注一件事，按自己的节奏完成。", "Focus on one thing at a time.")}</p></div><div className="date-stamp"><CalendarDays size={18} /><span>{today}</span></div></div>
+    <div className="welcome-row"><div><h2>{t(lang, `${profile.display_name}，今天从这里开始。`, `Welcome back, ${profile.display_name}.`)}</h2><p>{t(lang, "一次专注一件事，按自己的节奏完成。", "Focus on one thing at a time.")}</p></div><div className="today-meta"><div className="date-stamp"><CalendarDays size={18} /><span>{today}</span></div><WeatherWidget key={profile.id} userId={profile.id} language={lang}/></div></div>
     <section className="today-focus">
       <div><span className="focus-label">{resume && material ? t(lang, "继续上次", "Pick up where you left off") : primary ? t(lang, "今日主任务", "Today's focus") : t(lang, "下一步", "Your next step")}</span>
         <h3>{resume && material ? material.title : primary ? primary.title : due ? t(lang, `复习 ${due} 个到期词汇`, `Review ${due} due words`) : t(lang, "为今天选一组练习", "Choose a practice set")}</h3>

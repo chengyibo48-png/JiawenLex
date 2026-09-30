@@ -15,6 +15,48 @@
   --danger: #ab4c43;
 }
 
+/* Study navigation uses the same rounded controls across cards and guides. */
+.library-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:7px; border:1px solid var(--border); border-radius:19px; background:var(--surface-soft); width:fit-content; max-width:100%; }
+.library-tabs > button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:10px 18px; border:1px solid transparent; border-radius:13px; background:transparent; color:var(--muted); font-weight:650; font-size:.88rem; transition:background .16s,color .16s,box-shadow .16s; }
+.library-tabs > button:hover { background:var(--primary-soft); color:var(--primary-strong); }
+.library-tabs > button.active { color:var(--surface); background:var(--primary); box-shadow:0 3px 9px color-mix(in srgb,var(--primary) 18%,transparent); }
+:root[data-theme="dark"] .library-tabs > button.active { color:var(--bg); }
+.word-memory .word-focus { min-height:600px; padding:clamp(28px,4vw,54px); background:radial-gradient(ellipse at 90% 0%,var(--primary-soft),transparent 60%),var(--surface); display:flex; flex-direction:column; align-items:stretch; }
+.word-memory .word-focus .card-top { flex-wrap:wrap; gap:16px; margin-bottom:48px; }
+.word-memory .word-focus .word-title { font-size:clamp(2.8rem,5vw,5rem); overflow-wrap:anywhere; margin-bottom:18px; }
+.word-memory .word-focus > .button-row { margin-top:auto; padding-top:24px; }
+.word-memory .word-focus > .muted.small:last-child { margin-top:20px; margin-bottom:0; }
+.word-card-tools { display:flex; gap:10px; align-items:center; }
+.word-favorite { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:10px 15px; min-height:44px; border:1px solid var(--border); border-radius:13px; color:var(--muted); background:var(--surface); }
+.word-favorite:hover, .word-favorite.is-favorite { border-color:var(--warning); color:var(--warning); background:color-mix(in srgb,var(--warning) 8%,var(--surface)); }
+.task-card .check-button { color:var(--primary); background:var(--primary-soft); border-color:color-mix(in srgb,var(--primary) 28%,var(--border)); }
+.today-meta { display:flex; flex-direction:column; align-items:flex-end; gap:10px; flex-shrink:0; }
+.weather-widget { position:relative; display:flex; gap:5px; align-items:center; }
+.weather-toggle { display:flex; gap:10px; align-items:center; text-align:start; min-height:44px; padding:9px 14px; border:1px solid var(--border); border-radius:14px; background:var(--surface); color:var(--primary); }
+.weather-toggle span { display:grid; font-size:.78rem; color:var(--muted); }
+.weather-toggle strong { font-size:.83rem; color:var(--ink); font-weight:600; }
+.weather-retry { display:flex; align-items:center; gap:4px; border:0; background:transparent; color:var(--muted); font-size:.75rem; }
+.weather-panel { position:absolute; right:0; top:calc(100% + 9px); width:340px; max-width:calc(100vw - 40px); padding:20px; border:1px solid var(--border); border-radius:20px; background:var(--surface); box-shadow:0 14px 40px rgba(15,40,32,.14); z-index:30; }
+.weather-panel .card-top { margin-bottom:16px; }
+.weather-panel .card-top strong { display:flex; gap:6px; align-items:center; }
+.weather-panel form { display:grid; gap:10px; margin-bottom:12px; }
+.weather-panel form > button { justify-self:start; }
+.weather-city { display:grid; gap:3px; text-align:start; width:100%; border:0; border-radius:10px; background:transparent; color:var(--ink); padding:10px; }
+.weather-city:hover { background:var(--primary-soft); }
+.weather-city small, .weather-attribution { color:var(--muted); font-size:.72rem; }
+.weather-panel p { margin:12px 0 7px; }
+@media (max-width:850px) {
+  .library-tabs { width:100%; gap:5px; border-radius:16px; }
+  .library-tabs > button { flex:1 1 auto; padding:9px 12px; font-size:.82rem; }
+  .word-memory .word-focus { min-height:480px; padding:24px; }
+  .word-memory .word-focus .card-top { margin-bottom:30px; }
+  .word-card-tools { gap:6px; }
+  .word-favorite { padding:9px 11px; }
+  .today-meta { align-items:flex-start; }
+  .weather-panel { right:auto; left:0; }
+}
+@media (prefers-reduced-motion:reduce) { .library-tabs > button { transition:none; } }
+
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #101c1a;
@@ -97,7 +139,7 @@ a { color: var(--primary); }
 .task-card { display: flex; flex-direction: column; min-height: 410px; }
 .task-list { margin: 19px 0 10px; }
 .task-row { padding: 14px 0; display: flex; align-items: center; gap: 13px; border-top: 1px solid var(--border); }
-.check-button { width: 25px; height: 25px; flex: none; display: grid; place-items: center; border: 1.5px solid #b5c9bb; background: var(--surface); color: transparent; border-radius: 7px; }
+.check-button { width: 25px; height: 25px; flex: none; display: grid; place-items: center; border: 1.5px solid #b5c9bb; background: var(--surface); color: var(--primary); border-radius: 7px; }
 .check-button:hover { color: white; background: var(--primary); border-color: var(--primary); }
 .task-copy { flex: 1; min-width: 0; }
 .task-copy > div { display: flex; align-items: center; gap: 10px; }
