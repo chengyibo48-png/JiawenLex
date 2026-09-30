@@ -337,6 +337,9 @@ export function PracticeCatalog({
                   <span className="catalog-card-top">
                     <strong>{material.title}</strong>
                     <span className="approval-pill">
+                      {material.origin_kind === "source" ? t(lang,"资料原题","Source questions") : material.origin_kind === "adapted" ? t(lang,"改编练习","Adapted exercises") : material.origin_kind === "mixed" ? t(lang,"原题与改编","Mixed origins") : t(lang,"个人资料","Personal material")}
+                    </span>
+                    <span className="approval-pill">
                       {label(state(material.id))}
                     </span>
                   </span>
