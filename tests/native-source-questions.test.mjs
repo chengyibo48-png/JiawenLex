@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { isCorrectAnswer, isGradableQuestion, weakSkills } from "../lib/study.ts";
-import { validateSourceQuestion } from "../lib/source-question.ts";
+import { canRevisePublishedQuestion, validateSourceQuestion } from "../lib/source-question.ts";
+
+test("Published source corrections require an explicit payload and current material revision", () => {
+  assert.equal(canRevisePublishedQuestion("published", "question", "publish_question", true, 2), true);
+  for (const args of [["rejected","question","publish_question",true,2],["published","note","publish_question",true,2],["published","question","save",true,2],["published","question","publish_question",false,2],["published","question","publish_question",true,undefined],["published","question","publish_question",true,0]]) assert.equal(canRevisePublishedQuestion(...args), false);
+});
 
 const documentId = "11111111-1111-4111-8111-111111111111";
 const reference = { document_id: documentId, physical_page: 24, role: "question" };

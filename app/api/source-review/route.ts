@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, authenticatedDb, HttpError, requireUser } from "@/lib/server-auth";
-import { validateSourceQuestion } from "@/lib/source-question";
+import { canRevisePublishedQuestion, validateSourceQuestion } from "@/lib/source-question";
 
 const Update = z.object({
   candidateId: z.string().uuid(),
   action: z.enum(["save", "reject", "publish_question", "publish_vocabulary", "publish_guide"]),
   shared: z.boolean().default(false),
   payload: z.record(z.string(), z.unknown()).optional(),
+  expectedRevision: z.number().int().positive().optional(),
   contentKind: z.enum(["page_text", "question", "vocabulary", "reference_answer", "figure", "note"]).optional(),
 });
 type ReviewCandidate = { id: string; owner_id: string; document_id: string; batch_id: string; fingerprint: string; physical_page: number; printed_page: string; section_title: string; content_kind: string; payload: Record<string, unknown>; status: string; published_material_id: string | null };
@@ -84,7 +85,14 @@ export async function GET(request: Request) {
       if (result.error) throw result.error;
       documents = result.data ?? [];
     }
-    return NextResponse.json({ candidates: candidates ?? [], documents, count: count ?? 0, page, pageSize });
+    const publishedIds = (candidates ?? []).filter(item => item.status === "published" && item.content_kind === "question").map(item => item.published_material_id ?? item.id);
+    const revisions = new Map<string, number>();
+    if (publishedIds.length) {
+      const materials = await admin.from("materials").select("id,revision").eq("owner_id", userId).in("id", publishedIds);
+      if (materials.error) throw materials.error;
+      for (const material of materials.data ?? []) revisions.set(material.id, material.revision);
+    }
+    return NextResponse.json({ candidates: (candidates ?? []).map(item => ({ ...item, material_revision: revisions.get(item.published_material_id ?? item.id) })), documents, count: count ?? 0, page, pageSize });
   } catch (error) { return apiError(error); }
 }
 
@@ -96,7 +104,8 @@ export async function PATCH(request: Request) {
     if (error) throw error;
     const candidate = data as ReviewCandidate | null;
     if (!candidate) throw new HttpError(404, "Review candidate unavailable");
-    if (candidate.status === "published" || candidate.status === "rejected") throw new HttpError(409, "This candidate has already been closed");
+    const revising = canRevisePublishedQuestion(candidate.status, candidate.content_kind, input.action, !!input.payload, input.expectedRevision);
+    if (candidate.status === "rejected" || (candidate.status === "published" && !revising)) throw new HttpError(409, "This candidate has already been closed; a question correction requires its current material revision");
     const payload = { ...(input.payload ?? candidate.payload) };
     if (candidate.payload.possible_duplicate_of) payload.possible_duplicate_of = candidate.payload.possible_duplicate_of;
     const contentKind = input.contentKind ?? candidate.content_kind;
@@ -113,7 +122,7 @@ export async function PATCH(request: Request) {
     const { data: document, error: sourceError } = await admin.from("source_documents").select("title,license_name,skill,page_count,rights_attested_at,rights_attestation").eq("id", candidate.document_id).eq("owner_id", userId).maybeSingle();
     if (sourceError) throw sourceError;
     if (!document) throw new HttpError(404, "Source document unavailable");
-    const id = candidate.id;
+    const id = revising ? candidate.published_material_id ?? candidate.id : candidate.id;
     if (input.shared && (profile.role !== "admin" || !document.rights_attested_at)) throw new HttpError(403, "组内发布需要管理员及上传者授权声明");
     if (input.action === "publish_guide") {
       if (contentKind !== "note" || payload.reviewed_against_pdf !== true) throw new HttpError(400, "方法笔记尚未对照原页核验");
@@ -192,9 +201,15 @@ export async function PATCH(request: Request) {
       file_path: attachmentPath ?? null, file_name: attachmentPath?.split("/").at(-1) ?? null, file_kind: attachmentMime,
       source_document_id: candidate.document_id, source_physical_page: candidate.physical_page, source_printed_page: candidate.printed_page,
     };
-    const { error: materialError } = await authenticatedDb(request).from("materials").upsert(material, { onConflict: "id" });
-    if (materialError) throw materialError;
-    const result = await admin.from("source_review_candidates").update({ payload, content_kind: contentKind, status: "published", published_material_id: id, updated_at: new Date().toISOString() }).eq("id", id).eq("owner_id", userId);
+    if (revising) {
+      const updated = await authenticatedDb(request).from("materials").update(material).eq("id", id).eq("owner_id", userId).eq("revision", input.expectedRevision!).select("id");
+      if (updated.error) throw updated.error;
+      if (!updated.data?.length) throw new HttpError(409, "材料已更新，请保留修改并重新核对当前版本");
+    } else {
+      const { error: materialError } = await authenticatedDb(request).from("materials").upsert(material, { onConflict: "id" });
+      if (materialError) throw materialError;
+    }
+    const result = await admin.from("source_review_candidates").update({ payload, content_kind: contentKind, status: "published", published_material_id: id, updated_at: new Date().toISOString() }).eq("id", candidate.id).eq("owner_id", userId);
     if (result.error) throw result.error;
     return NextResponse.json({ published: true, materialId: id });
   } catch (error) { return apiError(error); }

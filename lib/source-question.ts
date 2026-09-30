@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 const uuid = z.string().uuid();
+export function canRevisePublishedQuestion(status: string, kind: string, action: string, hasPayload: boolean, expectedRevision?: number) {
+  return status === "published" && kind === "question" && action === "publish_question" && hasPayload && Number.isInteger(expectedRevision) && Number(expectedRevision) > 0;
+}
 const sourceRef = z.object({
   document_id: uuid,
   physical_page: z.number().int().positive(),
