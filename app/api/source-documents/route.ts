@@ -81,11 +81,11 @@ async function createUpload(userId: string, admin: import("@supabase/supabase-js
 export async function GET(request: Request) {
   try {
     const { userId, admin } = await requireUser(request);
-    const { data, error } = await admin.from("source_documents").select("id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,content_kind,source_url,license_name,parse_status,parsed_pages,status,created_at").eq("owner_id", userId).order("created_at", { ascending: false }).limit(500);
+    const { data, error } = await admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,content_kind,source_url,license_name,parse_status,parsed_pages,status,created_at,members_visible").or(`owner_id.eq.${userId},members_visible.eq.true`).order("created_at", { ascending: false }).limit(500);
     if (error) throw error;
     const storage = sourceStorage();
     const usedBytes = await usedSourceBytes(storage.client, storage.bucket);
-    return NextResponse.json({ documents: data ?? [], capacity: { usedBytes, maxBytes: storage.maxBytes, maxFileBytes: SOURCE_MAX_FILE_BYTES } });
+    return NextResponse.json({ documents: (data ?? []).map(({ owner_id, ...document }) => ({ ...document, canManageSharing: owner_id === userId })), capacity: { usedBytes, maxBytes: storage.maxBytes, maxFileBytes: SOURCE_MAX_FILE_BYTES } });
   } catch (error) { return apiError(error); }
 }
 
