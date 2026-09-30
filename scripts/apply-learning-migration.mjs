@@ -1,3 +1,5 @@
+import { assertReleaseMutation } from './release-policy.mjs';
+assertReleaseMutation();
 import pg from 'pg';
 import {readFile} from 'node:fs/promises';
 if(!process.env.DATABASE_URL)process.loadEnvFile('.env.local');

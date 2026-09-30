@@ -1,3 +1,5 @@
+import { assertReleaseMutation } from './release-policy.mjs';
+assertReleaseMutation();
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";

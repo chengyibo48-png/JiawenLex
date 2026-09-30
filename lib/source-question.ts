@@ -52,6 +52,7 @@ export function validateSourceQuestion(input: unknown, documentId: string) {
   if (value.skill === "listening" && !value.audioFilePath && (!value.listening_text_training || value.origin_kind !== "adapted" || !value.transcript.trim())) throw new Error("缺少音频，不能发布完整听力题；可改为明确标注的听力文本训练");
   if (value.listening_text_training && (value.skill !== "listening" || value.questions.some((item) => item.origin_kind !== "adapted"))) throw new Error("听力文本训练须为改编练习");
   if (value.skill === "reading" && !value.passage.trim()) throw new Error("阅读题缺少文章");
+  if (["writing", "speaking"].includes(value.skill) && value.questions.some((q) => q.answer_mode !== "open")) throw new Error("写作和口语题必须使用开放回答，不能按唯一答案判分");
   const ids = new Set<string>();
   for (const item of value.questions) {
     if (ids.has(item.id)) throw new Error(`题号重复：${item.id}`);

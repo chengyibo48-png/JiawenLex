@@ -83,7 +83,10 @@ export function ResponsePrompt({
     try {
       const result = await apiFetch(actions.client, "/api/question-reports", { method: "POST", body: JSON.stringify(body) }) as { directEdit: boolean };
       actions.notify(result.directEdit ? t(lang, "已直接修正并保存题目。", "The prompt correction was applied.") : t(lang, "反馈已送给题目作者审核。", "Correction sent to the prompt author for review."));
-      if (result.directEdit) setPrompt((current) => current ? { ...current, body: reportText.trim() } : current);
+      if (result.directEdit && typeof body.suggestedPrompt === "string") {
+        const correctedPrompt = body.suggestedPrompt;
+        setPrompt((current) => current ? { ...current, body: correctedPrompt } : current);
+      }
       setReportOpen(false);
       await actions.refresh();
     } catch (cause) { actions.notify(cause instanceof Error ? cause.message : t(lang, "提交反馈失败。", "Could not submit the report.")); }

@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { APP_VERSION } from "@/lib/release";
 import { brandAssets } from "@/lib/brand";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -653,6 +654,7 @@ export function Workspace() {
           )}
         </nav>
         <div className="sidebar-bottom">
+          <small className="muted">JiawenLex v{APP_VERSION}</small>
           <div className="goal-mini">
             <span className="goal-mini-icon">
               <Sparkles size={17} />

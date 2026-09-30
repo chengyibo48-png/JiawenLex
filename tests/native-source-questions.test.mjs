@@ -32,6 +32,8 @@ test("source review rejects missing passage, audio, bad choices and unverified O
   assert.throws(() => validateSourceQuestion(payload({ skill: "listening", passage: "" }), documentId));
   assert.throws(() => validateSourceQuestion(payload({ reviewed_against_pdf: false }), documentId));
   assert.throws(() => validateSourceQuestion(payload({ extraction_issues: ["跨栏错位"] }), documentId));
+  assert.throws(() => validateSourceQuestion(payload({ skill: "writing" }), documentId));
+  assert.throws(() => validateSourceQuestion(payload({ skill: "speaking" }), documentId));
   assert.throws(() => validateSourceQuestion(payload({ questions: [{ ...payload().questions[0], answers: ["D"] }] }), documentId));
   assert.throws(() => validateSourceQuestion(payload({ questions: [{ ...payload().questions[0], requires_figure: true }] }), documentId));
   assert.throws(() => validateSourceQuestion(payload({ source_refs: [{ ...reference, role: "figure" }] }), documentId));

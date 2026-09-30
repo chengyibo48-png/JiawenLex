@@ -12,6 +12,7 @@ import {
   UploadPartCommand, CompleteMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import { storedBackupBytes } from "../lib/backup-capacity.ts";
+import { assertReleaseMutation } from "./release-policy.mjs";
 
 // Local, owner-scoped ingestion of the explicitly requested 94-PDF collection.
 // Originals are never rewritten. No credentials are stored in manifests or logs.
@@ -27,9 +28,11 @@ const { values, positionals } = parseArgs({
     directory: { type: "string", default: "D:\\BaiduNetdiskDownload" },
     manifest: { type: "string", default: ".source-archive/manifest.json" },
     owner: { type: "string" },
+    "release-version": { type: "string" },
   },
 });
 const mode = positionals[0] ?? "inventory";
+if (mode === "upload") assertReleaseMutation();
 if (!["inventory", "upload"].includes(mode)) throw new Error("Use inventory or upload --owner <uuid>");
 const manifestPath = resolve(values.manifest);
 const controller = new AbortController();

@@ -1,3 +1,5 @@
+import { assertReleaseMutation } from './release-policy.mjs';
+assertReleaseMutation();
 // Import conservative native candidates into the owner's PRIVATE review queue.
 // This script never publishes exercises, marks OCR verified, or reads PDF contents remotely.
 import { execFile } from "node:child_process";

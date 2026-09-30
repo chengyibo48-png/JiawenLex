@@ -1,3 +1,5 @@
+import { assertReleaseMutation } from './release-policy.mjs';
+assertReleaseMutation();
 // Authorized local maintenance: use a real short-lived owner session and the application's review API.
 // Session secrets never appear in bundles, logs or committed files.
 import {readFile,readdir} from 'node:fs/promises';

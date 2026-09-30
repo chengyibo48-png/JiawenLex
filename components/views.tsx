@@ -1,5 +1,6 @@
 "use client";
 import { WordMemory } from "./word-memory";
+import { APP_VERSION } from "@/lib/release";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -2398,7 +2399,7 @@ export function SettingsView({
     <div className="page-stack">
       <div className="page-intro">
         <div>
-          <span className="eyebrow">YOUR PREFERENCES</span>
+          <span className="eyebrow">JiawenLex v{APP_VERSION} · YOUR PREFERENCES</span>
           <h2>{t(lang, "个人设置", "Settings")}</h2>
           <p>
             {t(
