@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { CircleAlert } from "lucide-react";
-import type { Material, Language } from "@/lib/types";
+import type { Material, Language, Question } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { t } from "./workspace";
 import { Modal } from "./modal";
@@ -11,13 +11,17 @@ export function ResponsePrompt({
   revision,
   actions,
   lang,
+  finished,
+  figureUrl,
 }: {
   material: Material;
   revision: number;
   actions: ViewActions;
   lang: Language;
+  finished: boolean;
+  figureUrl?: string | null;
 }) {
-  const [prompt, setPrompt] = useState<{ body: string; title: string } | null>(
+  const [prompt, setPrompt] = useState<{ body: string; title: string; questions: Question[] } | null>(
       null,
     ),
     [error, setError] = useState(false),
@@ -31,7 +35,7 @@ export function ResponsePrompt({
     setPrompt(null);
     setError(false);
     if (revision === (material.revision ?? 1)) {
-      setPrompt({ body: material.prompt, title: material.title });
+      setPrompt({ body: material.prompt, title: material.title, questions: material.questions });
       return;
     }
     if (!actions.client) {
@@ -51,6 +55,7 @@ export function ResponsePrompt({
           setPrompt({
             body: result.data.snapshot.prompt,
             title: result.data.snapshot.title,
+            questions: result.data.snapshot.questions ?? [],
           });
       });
     return () => {
@@ -102,6 +107,10 @@ export function ResponsePrompt({
         <>
           <h4>{prompt.title}</h4>
           <p>{prompt.body}</p>
+          {figureUrl && revision === (material.revision ?? 1) && <img className="question-figure" src={figureUrl} alt={t(lang, "题目辅助图表", "Supporting figure")} />}
+          {material.file_kind?.startsWith("image/") && revision !== (material.revision ?? 1) && <p className="notice info">{t(lang, "历史版本图表暂不可加载，请保留草稿并打开当前题目后作答。", "The historical figure is unavailable. Keep your draft and open the current exercise before answering.")}</p>}
+          {prompt.questions.map((question) => <div key={question.id} className="muted small"><span className="soft-tag">{question.origin_kind === "adapted" ? t(lang, "改编练习", "Adapted exercise") : question.origin_kind === "source" ? t(lang, "资料原题", "Source question") : t(lang, "来源未标注", "Origin unspecified")}</span>{question.source_physical_page && <span> · {t(lang, "PDF 物理页", "PDF page")} {question.source_physical_page}</span>}</div>)}
+          {finished && prompt.questions.some((question) => question.reference_answers?.length) && <details><summary>{t(lang, "查看资料参考回答", "View source sample responses")}</summary>{prompt.questions.flatMap((question) => question.reference_answers ?? []).map((answer, index) => <p key={index}>{answer}</p>)}</details>}
           <button className="question-report-button response-prompt-report" disabled={revision !== (material.revision ?? 1)} onClick={() => { setReportKind("grammar"); setReportText(prompt.body); setReportNote(""); setReportOpen(true); }}><CircleAlert size={16}/>{t(lang, "反馈 / 修改题目", "Report / edit prompt")}</button>
           {revision !== (material.revision ?? 1) && <p className="muted small">{t(lang, "当前查看的是历史题目版本，需打开当前版本后才能修改。", "This is an older prompt version. Open the current version to suggest a correction.")}</p>}
         </>

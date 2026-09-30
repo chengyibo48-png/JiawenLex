@@ -88,6 +88,7 @@ export function PracticeView({
   const [finished, setFinished] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [figureUrl, setFigureUrl] = useState<string | null>(null);
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [selectedId]);
   const [recording, setRecording] = useState(false);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
@@ -412,6 +413,15 @@ export function PracticeView({
     };
   }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client]);
 
+  useEffect(() => {
+    if (!selected?.file_path || !selected.file_kind?.startsWith("image/") || !actions.client) { setFigureUrl(null); return; }
+    let active = true;
+    void apiFetch(actions.client, `/api/files/url?materialId=${encodeURIComponent(selected.id)}`)
+      .then((value) => { if (active) setFigureUrl((value as { url: string }).url); })
+      .catch(() => { if (active) setFigureUrl(null); });
+    return () => { active = false; };
+  }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client]);
+
   useEffect(
     () => () => {
       if (recordedUrl) URL.revokeObjectURL(recordedUrl);
@@ -572,6 +582,7 @@ export function PracticeView({
     try {
       const gradedQuestions = selected.questions.filter(isGradableQuestion);
       const count = gradedQuestions.length;
+      const questionType = (question: Question) => selected.tags.includes("listening-text") ? "listening_text" : question.type || selected.question_type || "Other";
       const attempt: Attempt = {
         id: (attemptId.current ??= crypto.randomUUID()),
         owner_id: data.profile.id,
@@ -588,13 +599,11 @@ export function PracticeView({
         saved_recording: false,
         question_stats: [
           ...new Set(
-            gradedQuestions.map(
-              (q) => q.type || selected.question_type || "Other",
-            ),
+            gradedQuestions.map(questionType),
           ),
         ].map((type) => {
           const questions = gradedQuestions.filter(
-            (q) => (q.type || selected.question_type || "Other") === type,
+            (q) => questionType(q) === type,
           );
           return {
             type,
@@ -1122,6 +1131,7 @@ export function PracticeView({
                 PRACTICE
               </span>
               <h2>{selected.title}</h2>
+              {selected.origin_kind && <p className="muted small"><span className="source-origin">{selected.origin_kind === "source" ? t(lang, "资料原题", "Source question") : selected.origin_kind === "adapted" ? t(lang, "改编练习", "Adapted exercise") : t(lang, "原题与改编", "Source and adapted")}</span> {selected.source_title}{selected.source_physical_page ? ` · ${t(lang, "原件第", "PDF page")} ${selected.source_physical_page} ${t(lang, "页", "")}` : ""}</p>}
             </div>
             <div className="practice-heading-right">
               <span className="timer-pill">
@@ -1134,7 +1144,7 @@ export function PracticeView({
               </span>
             </div>
           </div>
-          {selected.skill === "listening" && (
+          {selected.skill === "listening" && !selected.tags.includes("listening-text") && (
             <div className="segmented listening-mode">
               <button
                 className={!intensive ? "active" : ""}
@@ -1212,6 +1222,7 @@ export function PracticeView({
                   className={mode === "timed" ? "active" : ""}
                   disabled={
                     busy ||
+                    selected.tags.includes("listening-text") ||
                     recording ||
                     finished ||
                     revealed.length > 0 ||
@@ -1339,6 +1350,7 @@ export function PracticeView({
                 ready={sessionReady}
                 mobilePane={mobilePane}
                 audioUrl={audioUrl}
+                figureUrl={figureUrl}
                 transcriptOpen={transcriptOpen}
                 expired={mode === "timed" && remaining === 0}
                 onPane={changePane}
@@ -1363,6 +1375,8 @@ export function PracticeView({
                   revision={responseRevision}
                   actions={actions}
                   lang={lang}
+                  finished={finished}
+                  figureUrl={figureUrl}
                 />
                 <div className="muted small">
                   {t(
@@ -1511,6 +1525,8 @@ export function PracticeView({
                   revision={responseRevision}
                   actions={actions}
                   lang={lang}
+                  finished={finished}
+                  figureUrl={figureUrl}
                 />
               </section>
               <section className="card recording-card">

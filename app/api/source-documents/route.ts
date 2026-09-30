@@ -14,6 +14,7 @@ const UploadInput = z.object({
   author: z.string().max(300).default(""),
   sourceYear: z.number().int().min(1900).max(2200).nullable().default(null),
   skill: z.enum(["reading", "listening", "writing", "speaking"]).nullable().default(null),
+  skillTags: z.array(z.enum(["reading", "listening", "writing", "speaking"])).max(4).optional(),
   contentKind: z.enum(["reference", "questions", "vocabulary", "plan", "mixed", "unknown"]).default("unknown"),
   sourceUrl: z.string().max(2000).default(""),
   licenseName: z.string().max(500).default(""),
@@ -54,7 +55,8 @@ async function createUpload(userId: string, admin: import("@supabase/supabase-js
     id, owner_id: userId, title: input.title, original_name: input.originalName, object_key: objectKey,
     byte_size: input.byteSize, sha256: input.sha256, page_count: input.pageCount ?? null,
     source_title: input.sourceTitle, author: input.author, source_year: input.sourceYear,
-    skill: input.skill, content_kind: input.contentKind, source_url: input.sourceUrl, license_name: input.licenseName,
+    skill: input.skill, skill_tags: input.skillTags?.length ? [...new Set(input.skillTags)] : input.skill ? [input.skill] : [],
+    content_kind: input.contentKind, source_url: input.sourceUrl, license_name: input.licenseName,
   }).select("id").single();
   if (insertError) throw insertError;
   let uploadId: string | undefined;
@@ -81,7 +83,7 @@ async function createUpload(userId: string, admin: import("@supabase/supabase-js
 export async function GET(request: Request) {
   try {
     const { userId, admin } = await requireUser(request);
-    const { data, error } = await admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,content_kind,source_url,license_name,parse_status,parsed_pages,status,created_at,members_visible").or(`owner_id.eq.${userId},members_visible.eq.true`).order("created_at", { ascending: false }).limit(500);
+    const { data, error } = await admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,skill_tags,content_kind,source_url,license_name,rights_attestation,parse_status,parsed_pages,status,created_at,members_visible").or(`owner_id.eq.${userId},members_visible.eq.true`).order("created_at", { ascending: false }).limit(500);
     if (error) throw error;
     const storage = sourceStorage();
     const usedBytes = await usedSourceBytes(storage.client, storage.bucket);

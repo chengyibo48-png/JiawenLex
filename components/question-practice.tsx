@@ -11,10 +11,10 @@ import { Modal } from "./modal";
 import { t } from "./workspace";
 
 export function QuestionPractice({ material, lang, state, answers, revealed, finished, busy, locked, ready,
-  mobilePane, audioUrl, transcriptOpen, expired, client, notify, onPane, onTranscript, onAnswer, onState, onReveal, onSubmit }: {
+  mobilePane, audioUrl, figureUrl, transcriptOpen, expired, client, notify, onPane, onTranscript, onAnswer, onState, onReveal, onSubmit }: {
   material: Material; lang: Language; state: PracticeSessionState; answers: Record<string, string>;
   revealed: string[]; finished: boolean; busy: boolean; locked: boolean; ready: boolean;
-  mobilePane: "passage" | "questions"; audioUrl: string | null; transcriptOpen: boolean; expired: boolean;
+  mobilePane: "passage" | "questions"; audioUrl: string | null; figureUrl: string | null; transcriptOpen: boolean; expired: boolean;
   client: SupabaseClient | null; notify: (message: string) => void;
   onPane: (pane: "passage" | "questions") => void; onTranscript: () => void;
   onAnswer: (id: string, answer: string) => void; onState: (patch: Partial<PracticeSessionState>) => void;
@@ -37,13 +37,18 @@ export function QuestionPractice({ material, lang, state, answers, revealed, fin
     });
     return () => cancelAnimationFrame(frame);
   }, [ready, material.id]);
-  const questions = material.questions, missing = questions.filter((q) => !answers[q.id]?.trim());
+  const questions = material.questions, missing = questions.filter((q) => {
+    const answer = answers[q.id]?.trim();
+    if (!answer) return true;
+    if (q.answer_mode !== "multi_choice") return false;
+    try { return !(JSON.parse(answer) as unknown[]).length; } catch { return true; }
+  });
   const jump = (id: string) => {
     onPane("questions"); onState({ currentQuestionId: id, mobilePane: "questions" });
     requestAnimationFrame(() => {
       const row = refs.current.get(id);
       row?.scrollIntoView({ block: "nearest", behavior: "instant" });
-      row?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+      row?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
     });
   };
   const cannotEdit = busy || locked || !ready || expired || (state.mode === "timed" && !state.startedAt);
@@ -93,21 +98,24 @@ export function QuestionPractice({ material, lang, state, answers, revealed, fin
     <div className="mobile-pane-tabs"><button className={mobilePane === "passage" ? "active" : ""} onClick={() => onPane("passage")}>{t(lang, material.skill === "reading" ? "文章" : "音频与文字稿", material.skill === "reading" ? "Passage" : "Audio & transcript")}</button><button className={mobilePane === "questions" ? "active" : ""} onClick={() => onPane("questions")}>{t(lang, "题目", "Questions")}</button></div>
     <div className="reading-grid">
       <section className={`card passage-pane mobile-${mobilePane}`} aria-label={t(lang, "阅读材料或听力文字稿", "Passage or transcript")}>
-        {material.skill === "listening" && <>{audioUrl ? <audio controls src={audioUrl} className="audio-player" /> : <div className="audio-empty"><FileAudio size={20} />{t(lang, "这组听力还没有音频附件", "This set has no audio attachment")}</div>}<button className="text-action" disabled={state.mode === "timed" && !finished} onClick={onTranscript}>{transcriptOpen ? t(lang, "隐藏文字稿", "Hide transcript") : t(lang, "显示文字稿", "Show transcript")}<ChevronRight size={16} /></button>{state.mode === "timed" && !finished && <p className="muted small">{t(lang, "计时练习提交后开放文字稿。", "The transcript unlocks after timed practice is submitted.")}</p>}</>}
-        {(material.skill === "reading" || transcriptOpen) && <div className="passage-text">{(material.skill === "reading" ? material.passage : material.transcript).split("\n").map((p, i) => <p key={i}>{p}</p>)}</div>}
+        {material.skill === "listening" && !material.tags.includes("listening-text") && <>{audioUrl ? <audio controls src={audioUrl} className="audio-player" /> : <div className="audio-empty"><FileAudio size={20} />{t(lang, "这组听力还没有音频附件", "This set has no audio attachment")}</div>}<button className="text-action" disabled={state.mode === "timed" && !finished} onClick={onTranscript}>{transcriptOpen ? t(lang, "隐藏文字稿", "Hide transcript") : t(lang, "显示文字稿", "Show transcript")}<ChevronRight size={16} /></button>{state.mode === "timed" && !finished && <p className="muted small">{t(lang, "计时练习提交后开放文字稿。", "The transcript unlocks after timed practice is submitted.")}</p>}</>}
+        {material.tags.includes("listening-text") && <p className="notice info">{t(lang, "听力词汇文本训练 · 无配套音频，不是完整听力测试，成绩不计入听力正确率趋势。", "Listening vocabulary text practice · no audio. This is not a full listening test and does not affect listening accuracy trends.")}</p>}
+        {(material.skill === "reading" || transcriptOpen || material.tags.includes("listening-text")) && <div className="passage-text">{(material.skill === "reading" ? material.passage : material.transcript).split("\n").map((p, i) => <p key={i}>{p}</p>)}</div>}
+        {figureUrl && <img className="question-figure" src={figureUrl} alt={t(lang, "练习辅助图表", "Supporting figure for this exercise")} />}
       </section>
       <section className={`card questions-pane mobile-${mobilePane}`}>
-        <div className="card-top"><h3>{t(lang, "题目", "Questions")}</h3><span className="muted small">{questions.length} {t(lang, "题", "questions")}</span></div>
+        <div className="card-top"><h3>{t(lang, "题目", "Questions")}</h3><span className="muted small">{material.origin_kind && <span className="source-origin">{material.origin_kind === "source" ? t(lang, "资料原题", "Source question") : material.origin_kind === "adapted" ? t(lang, "改编练习", "Adapted exercise") : t(lang, "原题与改编", "Source and adapted")}</span>} {questions.length} {t(lang, "题", "questions")}</span></div>
         {questions.length ? questions.map((q, i) => {
           const shown = finished || (state.mode === "practice" && revealed.includes(q.id));
           const marked = state.flagged.includes(q.id);
+          const origin = q.origin_kind ?? material.origin_kind;
           return <div className={`answer-question ${state.currentQuestionId === q.id ? "question-focused" : ""}`} key={q.id} ref={(element) => { if (element) refs.current.set(q.id, element); else refs.current.delete(q.id); }}>
             <span className="question-number">{i + 1}</span><div>
-              <div className="question-heading"><strong>{q.prompt}</strong><div className="question-heading-actions"><button className="question-report-button" aria-label={t(lang, `反馈第${i + 1}题的错误`, `Report an error in question ${i + 1}`)} onClick={() => openReport(q)}><CircleAlert size={16}/><span>{t(lang, "报错 / 修改", "Report / edit")}</span></button><button className={`flag-question ${marked ? "active" : ""}`} aria-pressed={marked} aria-label={t(lang, `第${i + 1}题：${marked ? "取消稍后标记" : "标记稍后"}`, `Question ${i + 1}: ${marked ? "unflag" : "flag for later"}`)} disabled={busy || locked || !ready || finished} onClick={() => onState({ flagged: marked ? state.flagged.filter((id) => id !== q.id) : [...state.flagged, q.id] })}><Flag size={15} /><span>{marked ? t(lang, "已标记", "Flagged") : t(lang, "稍后", "Later")}</span></button></div></div>
+              <div className="question-heading"><div>{origin && <span className="source-origin">{origin === "source" ? t(lang, "资料原题", "Source question") : origin === "adapted" ? t(lang, "改编练习", "Adapted exercise") : t(lang, "来源待核对", "Source needs review")}</span>} <strong>{q.prompt}</strong>{q.source_physical_page && <small className="muted"> · {t(lang, `原件第 ${q.source_physical_page} 页`, `PDF page ${q.source_physical_page}`)}</small>}</div><div className="question-heading-actions"><button className="question-report-button" aria-label={t(lang, `反馈第${i + 1}题的错误`, `Report an error in question ${i + 1}`)} onClick={() => openReport(q)}><CircleAlert size={16}/><span>{t(lang, "报错 / 修改", "Report / edit")}</span></button><button className={`flag-question ${marked ? "active" : ""}`} aria-pressed={marked} aria-label={t(lang, `第${i + 1}题：${marked ? "取消稍后标记" : "标记稍后"}`, `Question ${i + 1}: ${marked ? "unflag" : "flag for later"}`)} disabled={busy || locked || !ready || finished} onClick={() => onState({ flagged: marked ? state.flagged.filter((id) => id !== q.id) : [...state.flagged, q.id] })}><Flag size={15} /><span>{marked ? t(lang, "已标记", "Flagged") : t(lang, "稍后", "Later")}</span></button></div></div>
               {q.word_limit && <p className="muted small">{t(lang, `最多 ${q.word_limit} 个词`, `No more than ${q.word_limit} words`)}</p>}
-              <input maxLength={2000} disabled={shown || cannotEdit} value={answers[q.id] ?? ""} onFocus={() => { if (!finished) onState({ currentQuestionId: q.id }); }} onChange={(e) => onAnswer(q.id, e.target.value)} placeholder={t(lang, "输入答案", "Type your answer")} aria-label={t(lang, `第 ${i + 1} 题答案`, `Question ${i + 1} answer`)} />
+              {q.answer_mode === "open" ? <textarea rows={6} maxLength={2000} disabled={shown || cannotEdit} value={answers[q.id] ?? ""} onFocus={() => onState({ currentQuestionId: q.id })} onChange={(e) => onAnswer(q.id, e.target.value)} aria-label={t(lang, `第 ${i + 1} 题回答`, `Question ${i + 1} response`)} /> : q.answer_mode === "multi_choice" ? <fieldset className="question-options" disabled={shown || cannotEdit}><legend>{t(lang, "选择所有正确选项", "Select all correct options")}</legend>{(q.choices ?? []).map((choice) => { let selected: string[] = []; try { const parsed = JSON.parse(answers[q.id] ?? "[]"); if (Array.isArray(parsed)) selected = parsed; } catch {} return <label key={choice}><input type="checkbox" checked={selected.includes(choice)} onChange={(event) => onAnswer(q.id, JSON.stringify(event.target.checked ? [...selected, choice] : selected.filter((item) => item !== choice)))} />{choice}</label>; })}</fieldset> : q.answer_mode === "single_choice" ? <fieldset className="question-options" disabled={shown || cannotEdit}><legend>{t(lang, "选择一项", "Select one")}</legend>{(q.choices ?? []).map((choice) => <label key={choice}><input type="radio" name={`question-${q.id}`} checked={answers[q.id] === choice} onChange={() => onAnswer(q.id, choice)} />{choice}</label>)}</fieldset> : <input maxLength={2000} disabled={shown || cannotEdit} value={answers[q.id] ?? ""} onFocus={() => { if (!finished) onState({ currentQuestionId: q.id }); }} onChange={(e) => onAnswer(q.id, e.target.value)} placeholder={t(lang, "输入答案", "Type your answer")} aria-label={t(lang, `第 ${i + 1} 题答案`, `Question ${i + 1} answer`)} />}
               {state.mode === "practice" && !shown && <button className="text-link" disabled={cannotEdit} onClick={() => onReveal(q.id)}>{t(lang, "查看答案与解析", "Check answer")}</button>}
-              {shown && <div className={`answer-feedback ${isGradableQuestion(q) ? isCorrectAnswer(q, answers[q.id] ?? "") ? "correct" : "incorrect" : ""}`}><strong>{!isGradableQuestion(q) ? t(lang, "本题暂不自动判分", "This question is not automatically scored") : isCorrectAnswer(q, answers[q.id] ?? "") ? t(lang, "答对了", "Correct") : `${t(lang, "参考答案", "Accepted answer")}: ${q.answers.join(" / ")}`}</strong><p>{q.explanation || (!isGradableQuestion(q) ? t(lang, "请对照原文和参考资料自行核验。", "Compare your answer with the source and review it yourself.") : "")}</p></div>}
+              {shown && <div className={`answer-feedback ${isGradableQuestion(q) ? isCorrectAnswer(q, answers[q.id] ?? "") ? "correct" : "incorrect" : ""}`}><strong>{!isGradableQuestion(q) ? t(lang, "本题暂不自动判分", "This question is not automatically scored") : isCorrectAnswer(q, answers[q.id] ?? "") ? t(lang, "答对了", "Correct") : `${t(lang, "参考答案", "Accepted answer")}: ${q.answer_mode === "multi_choice" ? q.answers.join(" + ") : q.answers.join(" / ")}`}</strong>{q.reference_answers?.length ? <p>{t(lang, "参考回答", "Sample response")}: {q.reference_answers.join(" / ")}</p> : null}<p>{q.explanation || (!isGradableQuestion(q) ? t(lang, "请对照原文和参考资料自行核验。", "Compare your answer with the source and review it yourself.") : "")}</p></div>}
             </div>
           </div>;
         }) : <p className="empty-text">{t(lang, "该题组还没有题目。", "No questions in this set yet.")}</p>}

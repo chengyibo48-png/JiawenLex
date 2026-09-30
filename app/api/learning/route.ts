@@ -66,6 +66,7 @@ export async function POST(request: Request) {
       allowed = !!grant.data;
     }
     if (!allowed) throw new HttpError(403, "Material unavailable");
+    if (m.tags.includes("listening-text") && input.mode === "timed") throw new HttpError(400, "Text-only listening vocabulary is practice mode only");
     if (input.materialStamp !== materialStamp(m))
       throw new HttpError(
         409,
@@ -77,6 +78,7 @@ export async function POST(request: Request) {
         "资料缺少题目，无法提交 / Material has no questions",
       );
     const gradable = m.questions.filter(isGradableQuestion);
+    const questionType = (question: Material["questions"][number]) => m.tags.includes("listening-text") ? "listening_text" : question.type || m.question_type || "Other";
     const payload = {
       id: input.id,
       owner_id: userId,
@@ -95,11 +97,11 @@ export async function POST(request: Request) {
       question_count: gradable.length ? gradable.length : null,
       question_stats: gradable.length ? [
         ...new Set(
-          gradable.map((q) => q.type || m.question_type || "Other"),
+          gradable.map(questionType),
         ),
       ].map((type) => {
-        const questions = m.questions.filter(
-          (q) => (q.type || m.question_type || "Other") === type,
+        const questions = gradable.filter(
+          (q) => questionType(q) === type,
         );
         return {
           type,

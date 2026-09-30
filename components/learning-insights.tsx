@@ -9,7 +9,7 @@ export function LearningInsights({ data }: { data: WorkspaceData }) {
     [perspective, setPerspective] = useState<LearningKind>("first");
   const own = data.attempts.filter((a) => a.owner_id === data.profile.id),
     objective = own.filter(
-      (a) => a.skill === "reading" || a.skill === "listening",
+      (a) => (a.skill === "reading" || a.skill === "listening") && !(a.question_stats?.length && a.question_stats.every((row) => ["listening_text", "vocabulary"].includes(row.type))),
     );
   const selected = objective.filter(
     (a) => (a.learning_kind ?? "legacy") === perspective,

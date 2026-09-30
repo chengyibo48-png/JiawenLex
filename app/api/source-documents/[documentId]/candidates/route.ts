@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sourceCandidateFingerprint } from "@/lib/source-fingerprint";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
@@ -19,10 +19,6 @@ const Input = z.object({
   items: z.array(Item).min(1).max(100),
 });
 type Context = { params: Promise<{ documentId: string }> };
-
-function fingerprint(item: z.infer<typeof Item>) {
-  return createHash("sha256").update(JSON.stringify([item.physicalPage, item.printedPage, item.sectionTitle, item.contentKind, item.payload])).digest("hex");
-}
 
 export async function POST(request: Request, { params }: Context) {
   try {
@@ -54,7 +50,7 @@ export async function POST(request: Request, { params }: Context) {
     }
     const rows = input.items.map((item) => ({
       owner_id: userId, document_id: documentId, batch_id: batchId,
-      fingerprint: fingerprint(item), physical_page: item.physicalPage, printed_page: item.printedPage,
+      fingerprint: sourceCandidateFingerprint(documentId, item), physical_page: item.physicalPage, printed_page: item.printedPage,
       section_title: item.sectionTitle, content_kind: item.contentKind, payload: item.payload,
     }));
     const { data, error } = await admin.from("source_review_candidates").upsert(rows, { onConflict: "document_id,fingerprint", ignoreDuplicates: true }).select("id");

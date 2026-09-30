@@ -47,7 +47,7 @@ export function dueWords(words: VocabularyWord[]): VocabularyWord[] {
 
 export function weakSkills(attempts: Attempt[]): Skill[] {
   const scored = skills.map((skill) => {
-    const relevant = attempts.filter((a) => a.skill === skill && ((skill !== "reading" && skill !== "listening") || a.learning_kind === "first"));
+    const relevant = attempts.filter((a) => a.skill === skill && (!a.question_stats?.length || !a.question_stats.every((row) => ["listening_text", "vocabulary"].includes(row.type))) && ((skill !== "reading" && skill !== "listening") || a.learning_kind === "first"));
     if (skill === "reading" || skill === "listening") {
       const items = relevant.reduce((sum, a) => sum + (a.question_count ?? 0), 0);
       const correct = relevant.reduce((sum, a) => sum + (a.correct_count ?? 0), 0);
@@ -98,12 +98,23 @@ export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], exist
 }
 
 export function isCorrectAnswer(question: Question, answer: string): boolean {
+  if (question.answer_mode === "open") return false;
+  if (question.answer_mode === "multi_choice") {
+    let selected: unknown;
+    try { selected = JSON.parse(answer); } catch { return false; }
+    if (!Array.isArray(selected) || !selected.every((item) => typeof item === "string")) return false;
+    const expected = [...new Set(question.answers.map(normaliseAnswer).filter(Boolean))].sort();
+    const actual = [...new Set(selected.map(normaliseAnswer).filter(Boolean))].sort();
+    return expected.length > 0 && expected.length === actual.length && expected.every((item, index) => item === actual[index]);
+  }
   if (!question.answers.some((accepted) => accepted.trim()) || !answer.trim()) return false;
   if (question.word_limit && answer.trim().split(/\s+/).length > question.word_limit) return false;
   return question.answers.some((accepted) => accepted.trim() && normaliseAnswer(accepted) === normaliseAnswer(answer));
 }
 
 export function isGradableQuestion(question: Question): boolean {
+  if (question.answer_mode === "open") return false;
+  if (question.answer_mode === "multi_choice") return question.answers.some((accepted) => accepted.trim()) && !!question.choices?.length;
   return question.answers.some((accepted) => accepted.trim());
 }
 

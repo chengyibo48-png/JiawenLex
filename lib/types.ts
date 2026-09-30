@@ -52,6 +52,10 @@ export interface StudyTask {
 }
 
 export interface Question {
+  origin_kind?: "source" | "adapted";
+  answer_mode?: "text" | "single_choice" | "multi_choice" | "open";
+  source_refs?: { document_id: string; physical_page: number; role: "question" | "passage" | "answer" | "figure" }[];
+  reference_answers?: string[];
   choices?: string[];
   checklist?: string[];
   evidence?: import("./review").Evidence;
@@ -68,6 +72,7 @@ export interface Question {
 }
 
 export interface Material {
+  origin_kind?: "source" | "adapted" | "mixed";
   revision?: number;
   updated_at?: string;
   collection_title?: string;

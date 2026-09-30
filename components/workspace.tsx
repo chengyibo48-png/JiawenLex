@@ -1084,7 +1084,7 @@ function AuthScreen({
   }
 
   return (
-    <div className="auth-screen">
+    <main className="auth-screen">
       <div className="auth-panel">
         <div className="auth-intro">
           <div className="brand">
@@ -1099,11 +1099,11 @@ function AuthScreen({
           </div>
           <div>
             <span className="eyebrow">YOUR IELTS WORKSPACE</span>
-            <h1>
+            <h2>
               把每一天的练习，
               <br />
               变成看得见的进步。
-            </h1>
+            </h2>
             <p>
               今日计划、四科练习、词汇复习与个人记录，都在同一个安静的地方。
             </p>
@@ -1131,7 +1131,7 @@ function AuthScreen({
               凭邀请码加入
             </button>
           </div>
-          <h2>
+          <h1>
             {resetFlow
               ? "设置新密码"
               : tab === "login"
@@ -1139,7 +1139,7 @@ function AuthScreen({
                 : tab === "register"
                   ? "开始你的备考"
                   : "重设密码"}
-          </h2>
+          </h1>
           <p className="muted">
             {resetFlow
               ? "输入新的登录密码。"
@@ -1243,6 +1243,6 @@ function AuthScreen({
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 }

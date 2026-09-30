@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sourceCandidateFingerprint } from "@/lib/source-fingerprint";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, HttpError } from "@/lib/server-auth";
@@ -61,7 +62,7 @@ export async function POST(request: Request, { params }: Context) {
     }
     const rows = input.items.map((item) => ({
       owner_id: grant.owner_id, document_id: documentId, batch_id: batchId,
-      fingerprint: createHash("sha256").update(JSON.stringify([item.physicalPage, item.printedPage, item.sectionTitle, item.contentKind, item.payload])).digest("hex"),
+      fingerprint: sourceCandidateFingerprint(documentId, item),
       physical_page: item.physicalPage, printed_page: item.printedPage, section_title: item.sectionTitle,
       content_kind: item.contentKind, payload: item.payload,
     }));

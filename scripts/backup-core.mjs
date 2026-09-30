@@ -141,6 +141,7 @@ export const recoveryTables = [
   "source_documents",
   "source_parse_batches",
   "source_review_candidates",
+  "source_page_audit",
   "question_error_reports",
 ];
 export function recoveryTableData(toc) {

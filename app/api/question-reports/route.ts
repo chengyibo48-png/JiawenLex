@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+import { validateQuestionAnswers } from "@/lib/question-answers";
 
 const CreateReport = z.object({
   materialId: z.string().uuid(),
@@ -83,6 +84,10 @@ export async function POST(request: Request) {
       ? { prompt: material.prompt, answers: [] as string[], explanation: "" }
       : questions.find((question) => question.id === input.questionId);
     if (!currentQuestion) throw new HttpError(404, "Question unavailable");
+    if (input.suggestedAnswers !== undefined) {
+      try { validateQuestionAnswers(currentQuestion, input.suggestedAnswers); }
+      catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "Invalid corrected answer"); }
+    }
     const currentAnswers = Array.isArray(currentQuestion.answers) ? currentQuestion.answers.filter((value): value is string => typeof value === "string") : [];
     if (currentQuestion.prompt !== input.expectedPrompt || JSON.stringify(currentAnswers) !== JSON.stringify(input.expectedAnswers) || String(currentQuestion.explanation ?? "") !== input.expectedExplanation)
       throw new HttpError(409, "This question changed. Reload the exercise and enter the correction again.");
@@ -121,6 +126,20 @@ export async function PATCH(request: Request) {
       if (error) throw error;
       if (!data?.length) throw new HttpError(409, "Report is unavailable or already closed");
       return NextResponse.json({ rejected: true });
+    }
+    const report = await admin.from("question_error_reports").select("material_id,question_id,suggested_answers").eq("id", input.reportId).eq("owner_id", userId).eq("status", "pending").maybeSingle();
+    if (report.error) throw report.error;
+    if (!report.data) throw new HttpError(409, "Report unavailable or already closed");
+    const currentReport = report.data;
+    const correctedAnswers = input.suggestedAnswers ?? currentReport.suggested_answers;
+    if (Array.isArray(correctedAnswers)) {
+      const material = await admin.from("materials").select("questions").eq("id", report.data.material_id).eq("owner_id", userId).maybeSingle();
+      if (material.error) throw material.error;
+      const question = (Array.isArray(material.data?.questions) ? material.data.questions : []).find((q) => q.id === currentReport.question_id);
+      if (question) {
+        try { validateQuestionAnswers(question, correctedAnswers); }
+        catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "Invalid corrected answer"); }
+      }
     }
     const { error } = await admin.rpc("apply_question_error_report", {
       p_report_id: input.reportId,
