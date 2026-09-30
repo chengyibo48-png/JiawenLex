@@ -22,7 +22,8 @@ export type Tombstone = {
     | "micro_attempts"
     | "micro_sessions"
     | "purged_micro_attempt"
-    | "provider_key";
+    | "provider_key"
+    | "source_documents";
   entityId: string;
   ownerId: string;
   at: string;

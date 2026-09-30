@@ -59,9 +59,7 @@ export async function usedSourceBytes(client: S3Client, bucket: string): Promise
   throw new HttpError(503, "Document storage usage listing exceeded its safety limit");
 }
 
-export async function removeSourceOwnerVersions(client: S3Client, bucket: string, ownerId: string): Promise<void> {
-  if (!/^[a-f\d-]{36}$/i.test(ownerId)) throw new Error("Invalid source owner id");
-  const prefix = `originals/${ownerId}/`;
+async function removeSourceVersions(client: S3Client, bucket: string, prefix: string, exactKey?: string): Promise<void> {
   let keyMarker: string | undefined, versionIdMarker: string | undefined;
   const seen = new Set<string>();
   const allVersions: { Key: string; VersionId: string }[] = [];
@@ -74,7 +72,7 @@ export async function removeSourceOwnerVersions(client: S3Client, bucket: string
       ...(result.DeleteMarkers ?? []).map((item) => ({ Key: item.Key, VersionId: item.VersionId })),
     ];
     if (entries.some((item) => !item.Key?.startsWith(prefix) || !item.VersionId)) throw new Error("Private document version inventory was incomplete");
-    allVersions.push(...entries as { Key: string; VersionId: string }[]);
+    allVersions.push(...entries.filter((item) => !exactKey || item.Key === exactKey) as { Key: string; VersionId: string }[]);
     if (!result.IsTruncated) { complete = true; break; }
     keyMarker = result.NextKeyMarker;
     versionIdMarker = result.NextVersionIdMarker;
@@ -88,4 +86,16 @@ export async function removeSourceOwnerVersions(client: S3Client, bucket: string
     const deleted = await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Quiet: true, Objects: allVersions.slice(index, index + 1000) } }));
     if (deleted.Errors?.length) throw new Error("Could not completely remove private PDF versions");
   }
+}
+
+export async function removeSourceObjectVersions(client: S3Client, bucket: string, ownerId: string, documentId: string, objectKey: string): Promise<void> {
+  if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(ownerId) ||
+      !/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(documentId) ||
+      !objectKey.startsWith(`originals/${ownerId}/${documentId}/`)) throw new Error("Invalid private document key");
+  await removeSourceVersions(client, bucket, objectKey, objectKey);
+}
+
+export async function removeSourceOwnerVersions(client: S3Client, bucket: string, ownerId: string): Promise<void> {
+  if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(ownerId)) throw new Error("Invalid source owner id");
+  await removeSourceVersions(client, bucket, `originals/${ownerId}/`);
 }

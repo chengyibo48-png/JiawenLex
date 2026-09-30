@@ -1,7 +1,8 @@
-import { AbortMultipartUploadCommand, DeleteObjectCommand, ListPartsCommand } from "@aws-sdk/client-s3";
+import { ListPartsCommand } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 import { sourceStorage } from "@/lib/source-storage";
+import { deleteSourceDocument } from "@/lib/source-deletion";
 
 type Context = { params: Promise<{ uploadId: string }> };
 
@@ -31,11 +32,7 @@ export async function DELETE(request: Request, { params }: Context) {
     const { data: session, error } = await admin.from("source_upload_sessions").select("id,document_id,object_key,upload_id,status").eq("id", uploadId).eq("owner_id", userId).maybeSingle();
     if (error) throw error;
     if (!session) throw new HttpError(404, "Upload session is unavailable");
-    const storage = sourceStorage();
-    if (session.status === "uploading") await storage.client.send(new AbortMultipartUploadCommand({ Bucket: storage.bucket, Key: session.object_key, UploadId: session.upload_id }));
-    if (session.status === "complete") await storage.client.send(new DeleteObjectCommand({ Bucket: storage.bucket, Key: session.object_key }));
-    const { error: deleteError } = await admin.from("source_documents").delete().eq("id", session.document_id).eq("owner_id", userId);
-    if (deleteError) throw deleteError;
+    await deleteSourceDocument(admin, userId, session.document_id);
     return NextResponse.json({ deleted: true });
   } catch (error) { return apiError(error); }
 }

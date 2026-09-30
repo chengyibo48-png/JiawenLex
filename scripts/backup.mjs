@@ -111,6 +111,17 @@ function sourceRestorer() {
     bucket: required("SOURCE_S3_BUCKET"),
   };
 }
+async function readySourceRows(client) {
+  const rows = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await client.from("source_documents")
+      .select("object_key,sha256,byte_size").eq("status", "ready")
+      .order("object_key").range(offset, offset + 999);
+    if (error) throw error;
+    rows.push(...data ?? []);
+    if (!data || data.length < 1000) return rows;
+  }
+}
 async function latestSnapshot() {
   if (process.env.SNAPSHOT_PREFIX) return snapshotPrefix(process.env.SNAPSHOT_PREFIX);
   const names = await completeSnapshots();
@@ -121,13 +132,14 @@ async function backup() {
   const dir = await mkdtemp(join(tmpdir(), "jiawenlex-backup-"));
   let activePrefix, verified = false;
   try {
+    const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), supabaseServerKey(), { auth: { persistSession: false } });
+    const sourceInventoryBeforeDump = await readySourceRows(client);
     const dumpPath = join(dir, "database.dump");
     await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--exclude-table-data=public.source_import_tokens", "--exclude-table-data=public.source_upload_sessions", "--file", dumpPath], required("DATABASE_URL"));
     const dump = await readFile(dumpPath);
     const prefix = `snapshots/${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}/`;
     activePrefix = prefix;
     await put(`${prefix}database.jlex`, dump);
-    const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), supabaseServerKey(), { auth: { persistSession: false } });
     const files = [];
     for (const bucketName of ["study-files", "study-audio"]) {
       for (const path of await storagePaths(client, bucketName)) {
@@ -139,11 +151,12 @@ async function backup() {
         files.push({ bucket: bucketName, path, objectKey, sha256: hash(bytes), bytes: bytes.length, ...(data.type && /^[\w.+-]+\/[\w.+-]+$/.test(data.type) ? { contentType: data.type } : {}) });
       }
     }
-    const { data: sourceRows, error: sourceRowsError } = await client.from("source_documents").select("object_key,sha256,byte_size").eq("status", "ready").order("object_key");
-    if (sourceRowsError) throw sourceRowsError;
-    const sourceStore = sourceRows?.length ? sourceReader() : null;
+    const sourceRows = await readySourceRows(client);
+    if (JSON.stringify(sourceRows) !== JSON.stringify(sourceInventoryBeforeDump))
+      throw new Error("Original PDF inventory changed during database backup; retry to avoid an incomplete snapshot");
+    const sourceStore = sourceRows.length ? sourceReader() : null;
     const sources = [];
-    for (const row of sourceRows ?? []) {
+    for (const row of sourceRows) {
       const bytes = Number(row.byte_size);
       if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > 536870912 || !/^[a-f\d]{64}$/.test(row.sha256)) throw new Error("Invalid source document metadata in database snapshot");
       const objectKey = `source-objects/${row.sha256}.jlex`;
@@ -167,6 +180,8 @@ async function backup() {
       }
       sources.push({ sourceKey: row.object_key, objectKey, sha256: row.sha256, bytes });
     }
+    if (JSON.stringify(await readySourceRows(client)) !== JSON.stringify(sourceRows))
+      throw new Error("Original PDF inventory changed while copying source files; retry the backup");
     const manifest = { version: 3, at: new Date().toISOString(), database: { objectKey: `${prefix}database.jlex`, sha256: hash(dump), bytes: dump.length }, files, sources };
     // Upload, download and verify the new snapshot before it can displace an old one.
     await put(`${prefix}manifest.jlex`, Buffer.from(JSON.stringify(manifest)));

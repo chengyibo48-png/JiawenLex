@@ -224,6 +224,7 @@ const entities = new Set([
   "micro_sessions",
   "purged_micro_attempt",
   "provider_key",
+  "source_documents",
 ]);
 function uuid(value) {
   if (
