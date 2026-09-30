@@ -29,9 +29,11 @@
     "@electric-sql/pglite": "^0.5.8",
     "@types/node": "latest",
     "@types/nodemailer": "latest",
+    "@types/pg": "^8.23.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "fake-indexeddb": "^6.2.5",
+    "pg": "^8.23.0",
     "typescript": "latest"
   },
   "packageManager": "pnpm@11.19.0"

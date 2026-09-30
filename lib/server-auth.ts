@@ -3,6 +3,14 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { getAdminClient } from "./supabase";
 import type { Profile } from "./types";
+import { createClient } from "@supabase/supabase-js";
+
+// Use the already verified user's real session for operations guarded by database RLS.
+export function authenticatedDb(request: Request) {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, {
+    global: { headers: { Authorization: request.headers.get("authorization")! } }, auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }

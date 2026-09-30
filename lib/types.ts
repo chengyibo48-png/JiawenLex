@@ -7,6 +7,7 @@ export type View =
   | "vocabulary"
   | "plan"
   | "library"
+  | "methods"
   | "progress"
   | "settings"
   | "admin";
@@ -140,6 +141,11 @@ export interface Attempt {
 }
 
 export interface VocabularyWord {
+  part_of_speech?: string;
+  pronunciation?: string;
+  pronunciation_uk?: string;
+  pronunciation_us?: string;
+  content_revision?: number;
   id: string;
   owner_id: string;
   term: string;

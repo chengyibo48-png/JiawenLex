@@ -115,6 +115,69 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
       } finally { await pg.exec("rollback"); }
     });
     await pg.query("insert into auth.sessions(id,user_id) values ($1,$2)", [session, owner]);
+    await t.test("Word reviews are idempotent, private and preserve schedules on reimport", async () => {
+      await pg.exec("begin");
+      try {
+        const cardId="10000000-0000-4000-8000-000000000001", eventId="10000000-0000-4000-8000-000000000002";
+        const card={term:"test",definition:"测试",example:"",part_of_speech:"n.",tags:["reading"]};
+        await pg.exec("set local role service_role");
+        await pg.query("select public.import_word_card($1,$2,$3,$4)",[owner,cardId,"fixture-word",JSON.stringify(card)]);
+        const first=(await pg.query("select public.record_word_review($1,$2,$3,true,1) as value",[owner,cardId,eventId])).rows[0].value;
+        const again=(await pg.query("select public.record_word_review($1,$2,$3,true,1) as value",[owner,cardId,eventId])).rows[0].value;
+        assert.deepEqual(again,first);assert.equal(first.interval_days,1);assert.equal(first.streak,1);
+        await denied(pg,()=>pg.query("select public.record_word_review($1,$2,$3,false,1)",[owner,cardId,eventId]),/review_event_mismatch/);
+        await denied(pg,()=>pg.query("select public.record_word_review($1,$2,$3,true,1)",[recipient,cardId,eventId]),/word_unavailable/);
+        const imported=(await pg.query("select public.import_word_card($1,$2,$3,$4) as value",[owner,cardId,"fixture-word",JSON.stringify({...card,tags:["listening"]})])).rows[0].value;
+        assert.equal(imported.streak,1);assert.equal(imported.last_reviewed_at,first.last_reviewed_at);
+        assert.deepEqual(imported.tags,["listening","reading"]);assert.equal(imported.content_revision,1);
+        await pg.query("update public.vocabulary set definition='新的含义' where id=$1",[cardId]);
+        assert.equal((await pg.query("select content_revision from public.vocabulary where id=$1",[cardId])).rows[0].content_revision,2);
+        await denied(pg,()=>pg.query("select public.record_word_review($1,$2,$3,true,1)",[owner,cardId,"10000000-0000-4000-8000-000000000003"]),/word_changed/);
+      } finally {await pg.exec("rollback");}
+    });
+    await t.test("Word corrections are atomic and do not reset memory progress", async () => {
+      await pg.exec("begin");
+      try {
+        const wordId="20000000-0000-4000-8000-000000000001",reportId="20000000-0000-4000-8000-000000000002";
+        await pg.query("insert into public.vocabulary(id,owner_id,term,definition,interval_days,streak) values($1,$2,'original','错误',8,3)",[wordId,owner]);
+        await pg.query("insert into public.word_error_reports(id,owner_id,word_id,content_revision,kind,suggestion,snapshot) values($1,$2,$3,1,'meaning',$4,'{}')",[reportId,owner,wordId,JSON.stringify({term:"original",definition:"已更正",example:"",pronunciation_uk:"/test/"})]);
+        await pg.exec("set local role service_role");
+        await denied(pg,()=>pg.query("select public.apply_word_report($1,$2)",[recipient,reportId]),/report_unavailable/);
+        await pg.query("select public.apply_word_report($1,$2)",[owner,reportId]);
+        await pg.query("select public.apply_word_report($1,$2)",[owner,reportId]);
+        const word=(await pg.query("select * from public.vocabulary where id=$1",[wordId])).rows[0];
+        assert.equal(word.definition,"已更正");assert.equal(word.content_revision,2);assert.equal(word.interval_days,8);assert.equal(word.streak,3);
+        assert.equal(word.pronunciation_uk,"/test/");
+        assert.equal((await pg.query("select status from public.word_error_reports where id=$1",[reportId])).rows[0].status,"applied");
+      } finally {await pg.exec("rollback");}
+    });
+    await t.test("Batch publication rejects unchecked OCR and can share a previously private card", async () => {
+      await pg.exec("begin");
+      try {
+        const doc="40000000-0000-4000-8000-000000000001",batch="40000000-0000-4000-8000-000000000002",checked="40000000-0000-4000-8000-000000000003",unchecked="40000000-0000-4000-8000-000000000004",foreign="40000000-0000-4000-8000-000000000005";
+        await pg.query("update public.profiles set role='admin' where id=$1",[owner]);
+        await pg.query("insert into public.source_documents(id,owner_id,title,original_name,object_key,byte_size,sha256,page_count,rights_attested_at) values($1,$2,'Fixture','fixture.pdf','fixture-object',1,repeat('1',64),1,now())",[doc,owner]);
+        await pg.query("insert into public.source_parse_batches(id,owner_id,document_id,total_pages) values($1,$2,$3,1)",[batch,owner,doc]);
+        for(const [id,uid,verified] of [[checked,owner,true],[unchecked,owner,false],[foreign,recipient,true]]) await pg.query("insert into public.source_review_candidates(id,owner_id,document_id,batch_id,fingerprint,physical_page,content_kind,payload) values($1::uuid,$2,$3,$4,encode(sha256(convert_to($1::uuid::text,'UTF8')),'hex'),1,'vocabulary',$5)",[id,uid,doc,batch,JSON.stringify({term:'fixture-'+id,definition:'测试',reviewed_against_pdf:verified,extraction_issues:[],tags:[]})]);
+        await signedIn(pg);
+        const first=(await pg.query("select public.publish_verified_word_cards($1,false) as result",[[checked,unchecked,foreign]])).rows[0].result;
+        assert.deepEqual(first.map(r=>r.published),[true,false,false]);
+        const second=(await pg.query("select public.publish_verified_word_cards($1,true) as result",[[checked]])).rows[0].result;assert.equal(second[0].published,true);
+        await pg.exec("reset role");
+        assert.equal((await pg.query("select count(*)::int as count from public.vocabulary_templates where id=$1",[checked])).rows[0].count,1);
+        assert.equal((await pg.query("select status from public.source_review_candidates where id=$1",[unchecked])).rows[0].status,"pending");
+        assert.equal((await pg.query("select count(*)::int as count from public.vocabulary where id=$1",[checked])).rows[0].count,1);
+      } finally {await pg.exec("rollback");}
+    });
+    await t.test("Method guides isolate private owner notes under search and sharing", async () => {
+      await pg.exec("begin");
+      try {
+        await pg.query("insert into public.study_guides(id,owner_id,title,category,body) values('30000000-0000-4000-8000-000000000001',$1,'Private guide','plan','A private study plan')",[recipient]);
+        await signedIn(pg);
+        const found=await pg.query("select id from public.study_guides where title ilike '%guide%'");assert.equal(found.rows.length,0);
+        await denied(pg,()=>pg.query("insert into public.study_guides(id,owner_id,title,category,body,visibility,approval,license_name) values('30000000-0000-4000-8000-000000000002',$1,'Public guide','plan','A guide','shared','approved','fixture-license')",[recipient]),/row-level security/);
+      } finally {await pg.exec("rollback");}
+    });
     await pg.query("insert into public.study_tasks(id,owner_id,week_start,planned_date,skill,title,minutes,status,source) values ($1,$2,$3,$3,'reading','Original task',30,'todo','rule')", [taskId, owner, planWeek]);
     await t.test("Invalid replacement rolls back deletion", async () => {
       await pg.exec("begin");

@@ -43,6 +43,8 @@ export function PracticeCatalog({
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
   const [status, setStatus] = useState("all");
+  const [origin,setOrigin]=useState("");
+  const [contentMode,setContentMode]=useState("");
   const all = practiceMaterials(data).filter(
     (m) =>
       m.skill === skill && (!m.training_kind || m.training_kind === "none"),
@@ -79,6 +81,8 @@ export function PracticeCatalog({
           .join(" ")
           .toLowerCase()
           .includes(search.trim().toLowerCase()) &&
+        (!origin || m.origin_kind === origin) &&
+        (!contentMode || (contentMode==="text" ? m.tags.includes("listening-text") : !!m.file_path && !!m.file_kind?.startsWith("audio/") && !m.tags.includes("listening-text"))) &&
         (!collection || m.collection_title === collection) &&
         (!type ||
           m.question_type === type ||
@@ -100,7 +104,7 @@ export function PracticeCatalog({
     setSearch("");
     setType("");
     setTag("");
-    setStatus("all");
+    setStatus("all");setOrigin("");setContentMode("");
     setCollection("");
   };
   return (
@@ -125,6 +129,7 @@ export function PracticeCatalog({
             aria-pressed={skill === item}
             onClick={() => {
               onSkill(item);
+              setOrigin("");setContentMode("");
               setType("");
               setTag("");
             }}
@@ -133,6 +138,7 @@ export function PracticeCatalog({
           </button>
         ))}
       </div>
+      <p className="notice info">{t(lang,({reading:"阅读题保留完整文章；填空、选择与判断按原答案核对。",listening:"配套音频题与词汇、文本训练分开；文本训练不计入听力测试正确率。",writing:"按 Task 1 / Task 2 选择；参考范文用于学习，作文不按唯一答案判错。",speaking:"按 Part 1 / Part 2 / Part 3 选择；可录音或填写回答，参考表达不作为唯一答案。"})[skill],({reading:"Read the full passage and answer by question type.",listening:"Audio tests and text training are separate; text training is excluded from listening test accuracy.",writing:"Choose Task 1 or Task 2. Sample responses are references, not unique answers.",speaking:"Choose Part 1, 2 or 3. Record or type a response; samples are not unique answers."})[skill])}</p>
       <div className="catalog-toolbar">
         <label className="search-field">
           <Search size={16} />
@@ -154,17 +160,20 @@ export function PracticeCatalog({
         >
           <summary>
             {t(lang, "筛选条件", "Filters")}
-            {[type, tag, status !== "all" ? status : ""].filter(Boolean)
+            {[type, tag, origin, contentMode, status !== "all" ? status : ""].filter(Boolean)
               .length > 0 && (
               <span className="approval-pill">
                 {
-                  [type, tag, status !== "all" ? status : ""].filter(Boolean)
+                  [type, tag, origin, contentMode, status !== "all" ? status : ""].filter(Boolean)
                     .length
                 }
               </span>
             )}
           </summary>
           <div className="catalog-filter-fields">
+            <label>{t(lang,"内容来源","Origin")}<select value={origin} onChange={e=>setOrigin(e.target.value)}><option value="">{t(lang,"全部来源","All origins")}</option><option value="source">{t(lang,"资料原题","Source questions")}</option><option value="adapted">{t(lang,"改编练习","Adapted exercises")}</option></select></label>
+            {skill==="listening"&&<label>{t(lang,"训练形式","Training mode")}<select value={contentMode} onChange={e=>setContentMode(e.target.value)}><option value="">{t(lang,"全部形式","All modes")}</option><option value="audio">{t(lang,"配套音频题","With audio")}</option><option value="text">{t(lang,"词汇与文本训练","Vocabulary and text")}</option></select></label>}
+
             <label>
               {t(lang, "题型", "Question type")}
               <select value={type} onChange={(e) => setType(e.target.value)}>
@@ -254,6 +263,7 @@ export function PracticeCatalog({
                 <span>
                   <span className="catalog-card-top">
                     <strong>{material.title}</strong>
+                    {material.origin_kind && <span className="approval-pill">{material.origin_kind === "source" ? t(lang,"资料原题","Source questions") : material.origin_kind === "adapted" ? t(lang,"改编练习","Adapted exercises") : t(lang,"原题与改编","Mixed origins")}</span>}
                     <small>
                       {materialPath(material)} · v{material.revision ?? 1}
                     </small>

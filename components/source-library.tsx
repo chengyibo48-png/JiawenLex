@@ -74,6 +74,7 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
   const [reviewDocumentFilter, setReviewDocumentFilter] = useState("");
   const [auditPhysicalPage, setAuditPhysicalPage] = useState(1);
   const [reviewSkillFilter, setReviewSkillFilter] = useState("");
+  const [reviewContentFilter, setReviewContentFilter] = useState("");
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [payloadText, setPayloadText] = useState("");
   const [reviewKind, setReviewKind] = useState<ReviewCandidate["content_kind"]>("page_text");
@@ -121,6 +122,7 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
       const search = new URLSearchParams({ status: reviewStatus, page: String(reviewPage), pageSize: "30" });
       if (reviewDocumentFilter) search.set("documentId", reviewDocumentFilter);
       if (reviewSkillFilter) search.set("skill", reviewSkillFilter);
+      if (reviewContentFilter) search.set("kind", reviewContentFilter);
       const result = await apiFetch(client, `/api/source-review?${search}`) as { candidates: ReviewCandidate[]; documents: ReviewDocument[]; count: number };
       setReview(result.candidates ?? []);
       setReviewCount(result.count ?? 0);
@@ -132,7 +134,7 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "无法读取审核队列");
     } finally { setLoading(false); }
-  }, [client, selectedCandidateId, reviewPage, reviewStatus, reviewDocumentFilter, reviewSkillFilter]);
+  }, [client, selectedCandidateId, reviewPage, reviewStatus, reviewDocumentFilter, reviewSkillFilter, reviewContentFilter]);
 
   useEffect(() => {
     if (mode === "originals") void refreshDocuments();
@@ -295,11 +297,14 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
     setImporting(true);
     try {
       const value = JSON.parse(await file.text()) as {
-        format?: string; parser?: string; parserVersion?: string; totalPages?: number; parsedPages?: number;
+        sourceSha256?: string; sourceDocumentId?: string; format?: string; parser?: string; parserVersion?: string; totalPages?: number; parsedPages?: number;
         items?: { physicalPage: number; printedPage?: string; sectionTitle?: string; contentKind: string; payload: Record<string, unknown> }[];
       };
       if (value.format !== "jiawenlex-mineru-v1" || !Array.isArray(value.items) || !value.totalPages || value.parsedPages === undefined)
         throw new Error("文件格式无效。请使用 JiawenLex MinerU 审核包格式。");
+      const original=documents.find(document=>document.id===importTarget);
+      if(value.sourceDocumentId&&value.sourceDocumentId!==importTarget)throw new Error("审核包不是选中的原文件。");
+      if(value.sourceSha256&&original?.sha256!==value.sourceSha256)throw new Error("审核包 SHA-256 与原文件不符。");
       let inserted = 0;
       for (let index = 0; index < value.items.length; index += 100) {
         const items = value.items.slice(index, index + 100);
@@ -311,7 +316,7 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
           body: JSON.stringify({
             parser, parserVersion,
             totalPages: value.totalPages, parsedPages: value.parsedPages,
-            idempotencyKey, items,
+            idempotencyKey, items, sourceSha256:value.sourceSha256,
           }),
         }) as { inserted?: number };
         inserted += result.inserted ?? 0;
@@ -324,12 +329,43 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
     } finally { setImporting(false); }
   }
 
-  async function reviewAction(action: "save" | "reject" | "publish_question" | "publish_vocabulary") {
+  const [batchBusy,setBatchBusy]=useState(false);
+  const [batchMessage,setBatchMessage]=useState("");
+  const [groupPublish,setGroupPublish]=useState(false);
+  async function publishVerifiedBatch() {
+    if(!client||batchBusy)return;
+    setBatchBusy(true);setBatchMessage("");
+    let completed=0,total=0;
+    try {
+      const ids:string[]=[];
+      for(let page=1;;page++) {
+        const search=new URLSearchParams({status:"open",verified:"true",page:String(page),pageSize:"100"});
+        if(reviewDocumentFilter)search.set("documentId",reviewDocumentFilter);
+        if(reviewSkillFilter)search.set("skill",reviewSkillFilter);
+        if(reviewContentFilter)search.set("kind",reviewContentFilter);
+        const result=await apiFetch(client,`/api/source-review?${search}`) as {candidates:ReviewCandidate[];count:number};
+        ids.push(...result.candidates.filter(c=>["question","vocabulary","note"].includes(c.content_kind)).map(c=>c.id));
+        if(page*100>=result.count)break;
+      }
+      total=ids.length;
+      if(!total){setBatchMessage(t(lang,"当前筛选下没有已核验的待发布内容。","No verified pending items match these filters."));return;}
+      const errors:string[]=[];
+      for(let offset=0;offset<total;offset+=20) {
+        const result=await apiFetch(client,"/api/source-review/batch",{method:"POST",body:JSON.stringify({ids:ids.slice(offset,offset+20),shared:groupPublish})}) as {published:number;results:{id:string;error?:string}[]};
+        completed+=result.published;errors.push(...result.results.filter(r=>r.error).map(r=>`${r.id.slice(0,8)}: ${r.error}`));
+        setBatchMessage(`${t(lang,"已发布","Published")}: ${completed} / ${total}`);
+      }
+      setBatchMessage(`${t(lang,"发布成功","Published")}: ${completed} / ${total}. `+errors.slice(0,10).join(" · "));
+      await refreshReview();
+    }catch(e){setBatchMessage(`${t(lang,"已发布","Published")}: ${completed} / ${total}. `+(e instanceof Error?e.message:"发布失败"));}finally{setBatchBusy(false);}
+  }
+
+  async function reviewAction(action: "save" | "reject" | "publish_question" | "publish_vocabulary" | "publish_guide") {
     if (!client || !selectedCandidate) return;
     let payload: Record<string, unknown>;
     try { payload = JSON.parse(payloadText) as Record<string, unknown>; }
     catch { notify(t(lang, "内容必须是有效 JSON。", "Content must be valid JSON.")); return; }
-    if (action === "publish_vocabulary") {
+    if (action === "publish_vocabulary" || action === "publish_guide") {
       if (!confirmedSource) { notify(t(lang, "请先对照原页核对词汇、释义与例句。", "Compare the term, definition and example with the PDF first.")); return; }
       payload = { ...payload, reviewed_against_pdf: true };
     }
@@ -383,16 +419,17 @@ export function SourceLibraryPanel({ mode, client, lang, notify }: Props) {
   return (
     <div className="source-review-layout">
       <section className="card source-import-card"><div className="card-top"><div><h3>{t(lang, "导入 MinerU 识别包", "Import MinerU review bundle")}</h3><p className="muted small">{t(lang, "先用 MinerU 完成全文解析，再导入按原页标记的 JiawenLex JSON 审核包。导入后仍需逐条核对。", "Parse the full PDF with MinerU, then import a JiawenLex JSON bundle with source page numbers. Every item still needs review.")}</p></div></div><div className="form-grid"><label>{t(lang, "原始资料", "Source PDF")}<select value={importTarget} onChange={(event) => setImportTarget(event.target.value)}><option value="">{t(lang, "选择已存档 PDF", "Select archived PDF")}</option>{documents.filter((document) => document.status === "ready" && document.canManageSharing).map((document) => <option value={document.id} key={document.id}>{document.title}</option>)}</select></label><label>{t(lang, "MinerU 审核包 JSON", "MinerU review bundle JSON")}<input ref={importInput} type="file" accept="application/json,.json" disabled={!importTarget || importing} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importMineruBundle(file); }}/></label></div>{importing && <p className="muted">{t(lang, "正在导入审核内容…", "Importing review candidates…")}</p>}</section>
-      <section className="card"><div className="library-toolbar"><label>{t(lang, "文件", "Document")}<select value={reviewDocumentFilter} onChange={(event) => { setReviewPage(1); setReviewDocumentFilter(event.target.value); }}><option value="">{t(lang, "全部文件", "All documents")}</option>{documents.filter((document) => document.canManageSharing).map((document) => <option key={document.id} value={document.id}>{document.title}</option>)}</select></label><label>{t(lang, "科目", "Skill")}<select value={reviewSkillFilter} onChange={(event) => { setReviewPage(1); setReviewSkillFilter(event.target.value); }}><option value="">{t(lang, "全部科目", "All skills")}</option>{["reading", "listening", "writing", "speaking"].map((skill) => <option key={skill} value={skill}>{skill}</option>)}</select></label><label>{t(lang, "状态", "Status")}<select value={reviewStatus} onChange={(event) => { setReviewPage(1); setReviewStatus(event.target.value); }}>{["open", "pending", "edited", "published", "rejected", "all"].map((status) => <option key={status} value={status}>{status}</option>)}</select></label></div><div className="button-row"><button className="button secondary small" disabled={reviewPage <= 1} onClick={() => setReviewPage((page) => page - 1)}>{t(lang, "上一页", "Previous")}</button><span className="muted small">{reviewPage} / {Math.max(1, Math.ceil(reviewCount / 30))} · {reviewCount} {t(lang, "条", "items")}</span><button className="button secondary small" disabled={reviewPage * 30 >= reviewCount} onClick={() => setReviewPage((page) => page + 1)}>{t(lang, "下一页", "Next")}</button></div></section>
+      <section className="card"><div className="library-toolbar"><label>{t(lang, "文件", "Document")}<select value={reviewDocumentFilter} onChange={(event) => { setReviewPage(1); setReviewDocumentFilter(event.target.value); }}><option value="">{t(lang, "全部文件", "All documents")}</option>{documents.filter((document) => document.canManageSharing).map((document) => <option key={document.id} value={document.id}>{document.title}</option>)}</select></label><label>{t(lang, "科目", "Skill")}<select value={reviewSkillFilter} onChange={(event) => { setReviewPage(1); setReviewSkillFilter(event.target.value); }}><option value="">{t(lang, "全部科目", "All skills")}</option>{["reading", "listening", "writing", "speaking"].map((skill) => <option key={skill} value={skill}>{skill}</option>)}</select></label><label>{t(lang,"内容","Content")}<select value={reviewContentFilter} onChange={event=>{setReviewPage(1);setReviewContentFilter(event.target.value);}}><option value="">{t(lang,"全部内容","All content")}</option><option value="question">{t(lang,"练习题","Exercises")}</option><option value="vocabulary">{t(lang,"词卡","Word cards")}</option><option value="note">{t(lang,"方法笔记","Study guides")}</option></select></label><label>{t(lang, "状态", "Status")}<select value={reviewStatus} onChange={(event) => { setReviewPage(1); setReviewStatus(event.target.value); }}>{["open", "pending", "edited", "published", "rejected", "all"].map((status) => <option key={status} value={status}>{status}</option>)}</select></label></div><div className="button-row"><button className="button secondary small" disabled={reviewPage <= 1} onClick={() => setReviewPage((page) => page - 1)}>{t(lang, "上一页", "Previous")}</button><span className="muted small">{reviewPage} / {Math.max(1, Math.ceil(reviewCount / 30))} · {reviewCount} {t(lang, "条", "items")}</span><button className="button secondary small" disabled={reviewPage * 30 >= reviewCount} onClick={() => setReviewPage((page) => page + 1)}>{t(lang, "下一页", "Next")}</button></div></section>
       {loadError && <div className="notice info">{loadError}</div>}
       <section className="card"><div className="card-top"><div><h3>{t(lang, "待审核内容", "Items to review")}</h3><p className="muted small">{t(lang, "确认原文、答案与页码后，再发布到练习或词汇。", "Check the original text, answers and page before publishing to practice or vocabulary.")}</p></div><span className="soft-tag">{review.length}</span></div>{!review.length ? <div className="empty-inline"><Check size={28}/><strong>{t(lang, "审核队列为空", "The review queue is empty")}</strong><p>{t(lang, "从已解析的原始 PDF 导入 MinerU 审核包。", "Import a MinerU bundle from a parsed original PDF.")}</p></div> : <div className="source-review-list">{review.map((candidate) => <button type="button" className={`source-review-item ${selectedCandidateId === candidate.id ? "selected" : ""}`} key={candidate.id} onClick={() => setSelectedCandidateId(candidate.id)}><span className="source-review-kind">{candidate.content_kind}</span><strong>{documentById.get(candidate.document_id)?.title ?? t(lang, "来源资料", "Source document")}</strong><span>{candidate.section_title || t(lang, `第 ${candidate.physical_page} 页`, `Page ${candidate.physical_page}`)} · {candidate.printed_page && `${t(lang, "印刷页码", "Printed page")} ${candidate.printed_page}`}</span><small>{String(candidate.payload.term ?? candidate.payload.prompt ?? candidate.payload.text ?? candidate.payload.title ?? "").slice(0, 180)}</small></button>)}</div>}</section>
       {client && (selectedCandidate || reviewDocumentFilter) && <div className="source-page-audit">
         {!selectedCandidate && <label>{t(lang, "核对页码", "Page to review")}<input type="number" min={1} max={documents.find((document) => document.id === reviewDocumentFilter)?.page_count ?? 1} value={auditPhysicalPage} onChange={(event) => setAuditPhysicalPage(Math.max(1, Math.min(documents.find((document) => document.id === reviewDocumentFilter)?.page_count ?? 1, Number(event.target.value) || 1)))} /></label>}
         <PageAuditControls client={client} lang={lang} documentId={selectedCandidate?.document_id ?? reviewDocumentFilter} physicalPage={selectedCandidate?.physical_page ?? auditPhysicalPage} notify={notify} />
       </div>}
-      {selectedCandidate && reviewKind === "vocabulary" && <label className="question-report-check"><input type="checkbox" checked={confirmedSource} onChange={(event) => setConfirmedSource(event.target.checked)} />{t(lang, "已对照原页核对词汇、释义、语境和例句。", "I checked the term, definition, context and example against the source PDF.")}</label>}
+      <section className="card"><div className="button-row"><button className="button primary" disabled={batchBusy} onClick={()=>void publishVerifiedBatch()}>{batchBusy?t(lang,"正在发布…","Publishing…"):t(lang,"一键一键发布全部已核验内容","Publish all verified items")}</button><label><input type="checkbox" checked={groupPublish} onChange={e=>setGroupPublish(e.target.checked)}/>{t(lang,"同时向组内成员发布（管理员）","Publish to group members (admin)")}</label></div><p className="muted small">{t(lang,"每批最多 20 条；不会自动勾选核验。缺配套、重复未处理或有识别疑点的内容会说明原因。","Up to 20 per batch. Unchecked, incomplete or unresolved items stay pending.")}</p>{batchMessage&&<p role="status">{batchMessage}</p>}</section>
+      {selectedCandidate && (reviewKind === "vocabulary" || reviewKind === "note") && <label className="question-report-check"><input type="checkbox" checked={confirmedSource} onChange={(event) => setConfirmedSource(event.target.checked)} />{t(lang, "已对照原页核对文字、含义、语境和例句。", "I checked the term, definition, context and example against the source PDF.")}</label>}
       {selectedCandidate && reviewKind === "question" && <section className="card"><h3>{t(lang, "发布前核验", "Review before publication")}</h3>{Boolean(selectedCandidate.payload.possible_duplicate_of) && <p className="notice info">{t(lang, "发现相同题干：请检查已有题目。同题的不同范文应合并为参考答案变体；确实是不同题目时，在 JSON 中填写 duplicate_resolution=distinct 和至少 10 字的 duplicate_note。", "A matching prompt exists. Merge alternate sample answers into the existing question. If this is genuinely distinct, set duplicate_resolution=distinct and add a duplicate_note of at least 10 characters in the JSON.")}</p>}<label className="question-report-check"><input type="checkbox" checked={confirmedSource} onChange={(event) => setConfirmedSource(event.target.checked)} />{t(lang, "已逐题对照 PDF 原页，核对题干、选项及所需文章或图表。", "I compared every question, option and required passage or figure with the source PDF.")}</label><label className="question-report-check"><input type="checkbox" checked={confirmedAnswers} onChange={(event) => setConfirmedAnswers(event.target.checked)} />{t(lang, "已核对答案对应页；缺答案的题明确保留为未判分，开放回答不设唯一答案。", "I checked the answer source; unanswered and open questions remain unscored.")}</label></section>}
-      {selectedCandidate && <section className="card source-review-detail"><div className="card-top"><div><h3>{selectedCandidate.content_kind === "vocabulary" ? t(lang, "核对词汇", "Review vocabulary") : selectedCandidate.content_kind === "question" ? t(lang, "核对练习题", "Review exercise") : t(lang, "核对原文摘录", "Review extracted text")}</h3><p className="muted small">{documentById.get(selectedCandidate.document_id)?.title} · {t(lang, "PDF 物理页", "PDF page")} {selectedCandidate.physical_page}{selectedCandidate.printed_page ? ` · ${t(lang, "书页", "Printed page")} ${selectedCandidate.printed_page}` : ""}</p></div><button className="icon-button" aria-label={t(lang, "关闭审核内容", "Close review item")} onClick={() => setSelectedCandidateId(null)}><X size={17}/></button></div><label className="review-kind-select">{t(lang, "内容类别", "Content type")}<select value={reviewKind} onChange={(event) => setReviewKind(event.target.value as ReviewCandidate["content_kind"])}><option value="page_text">{t(lang, "原文摘录", "Extracted page text")}</option><option value="question">{t(lang, "练习题", "Exercise")}</option><option value="vocabulary">{t(lang, "词汇", "Vocabulary")}</option><option value="reference_answer">{t(lang, "参考答案", "Reference answer")}</option><option value="figure">{t(lang, "图表", "Figure")}</option><option value="note">{t(lang, "笔记", "Note")}</option></select></label><div className="button-row"><button className="button secondary small" disabled={previewPhysicalPage <= 1} onClick={() => setPreviewPhysicalPage((page) => page - 1)}>{t(lang, "上一页原文", "Previous PDF page")}</button><span className="muted small">{previewPhysicalPage} / {documentById.get(selectedCandidate.document_id)?.page_count ?? "?"}</span><button className="button secondary small" disabled={previewPhysicalPage >= (documentById.get(selectedCandidate.document_id)?.page_count ?? previewPhysicalPage)} onClick={() => setPreviewPhysicalPage((page) => page + 1)}>{t(lang, "下一页原文", "Next PDF page")}</button></div><div className="source-review-columns"><div className="source-page-preview">{previewUrl ? <iframe title={t(lang, "PDF 原文页", "Original PDF page")} src={`${previewUrl}#page=${previewPhysicalPage}`} /> : <p className="muted">{t(lang, "正在载入原页…", "Loading source page…")}</p>}</div><label className="source-payload-editor">{t(lang, "识别内容（JSON）", "Extracted content (JSON)")}<textarea rows={22} value={payloadText} onChange={(event) => setPayloadText(event.target.value)} spellCheck={false}/></label></div><div className="button-row"><button className="button secondary" onClick={() => void reviewAction("save")}>{t(lang, "保存修改", "Save edits")}</button>{reviewKind === "question" && <button className="button primary" onClick={() => void reviewAction("publish_question")}>{t(lang, "核验并发布为练习", "Verify and publish exercise")}</button>}{reviewKind === "vocabulary" && <button className="button primary" onClick={() => void reviewAction("publish_vocabulary")}>{t(lang, "核验并加入词库", "Verify and add to vocabulary")}</button>}<button className="button danger-outline" onClick={() => void reviewAction("reject")}>{t(lang, "忽略此条", "Reject this item")}</button></div></section>}
+      {selectedCandidate && <section className="card source-review-detail"><div className="card-top"><div><h3>{selectedCandidate.content_kind === "vocabulary" ? t(lang, "核对词汇", "Review vocabulary") : selectedCandidate.content_kind === "question" ? t(lang, "核对练习题", "Review exercise") : t(lang, "核对原文摘录", "Review extracted text")}</h3><p className="muted small">{documentById.get(selectedCandidate.document_id)?.title} · {t(lang, "PDF 物理页", "PDF page")} {selectedCandidate.physical_page}{selectedCandidate.printed_page ? ` · ${t(lang, "书页", "Printed page")} ${selectedCandidate.printed_page}` : ""}</p></div><button className="icon-button" aria-label={t(lang, "关闭审核内容", "Close review item")} onClick={() => setSelectedCandidateId(null)}><X size={17}/></button></div><label className="review-kind-select">{t(lang, "内容类别", "Content type")}<select value={reviewKind} onChange={(event) => setReviewKind(event.target.value as ReviewCandidate["content_kind"])}><option value="page_text">{t(lang, "原文摘录", "Extracted page text")}</option><option value="question">{t(lang, "练习题", "Exercise")}</option><option value="vocabulary">{t(lang, "词汇", "Vocabulary")}</option><option value="reference_answer">{t(lang, "参考答案", "Reference answer")}</option><option value="figure">{t(lang, "图表", "Figure")}</option><option value="note">{t(lang, "笔记", "Note")}</option></select></label><div className="button-row"><button className="button secondary small" disabled={previewPhysicalPage <= 1} onClick={() => setPreviewPhysicalPage((page) => page - 1)}>{t(lang, "上一页原文", "Previous PDF page")}</button><span className="muted small">{previewPhysicalPage} / {documentById.get(selectedCandidate.document_id)?.page_count ?? "?"}</span><button className="button secondary small" disabled={previewPhysicalPage >= (documentById.get(selectedCandidate.document_id)?.page_count ?? previewPhysicalPage)} onClick={() => setPreviewPhysicalPage((page) => page + 1)}>{t(lang, "下一页原文", "Next PDF page")}</button></div><div className="source-review-columns"><div className="source-page-preview">{previewUrl ? <iframe title={t(lang, "PDF 原文页", "Original PDF page")} src={`${previewUrl}#page=${previewPhysicalPage}`} /> : <p className="muted">{t(lang, "正在载入原页…", "Loading source page…")}</p>}</div><label className="source-payload-editor">{t(lang, "识别内容（JSON）", "Extracted content (JSON)")}<textarea rows={22} value={payloadText} onChange={(event) => setPayloadText(event.target.value)} spellCheck={false}/></label></div><div className="button-row"><button className="button secondary" onClick={() => void reviewAction("save")}>{t(lang, "保存修改", "Save edits")}</button>{reviewKind === "question" && <button className="button primary" onClick={() => void reviewAction("publish_question")}>{t(lang, "核验并发布为练习", "Verify and publish exercise")}</button>}{reviewKind === "vocabulary" && <button className="button primary" onClick={() => void reviewAction("publish_vocabulary")}>{t(lang, "核验并加入词库", "Verify and add to vocabulary")}</button>}{reviewKind === "note" && <button className="button primary" onClick={() => void reviewAction("publish_guide")}>{t(lang,"核验并发布为方法笔记","Verify and publish guide")}</button>}<button className="button danger-outline" onClick={() => void reviewAction("reject")}>{t(lang, "忽略此条", "Reject this item")}</button></div></section>}
     </div>
   );
 }

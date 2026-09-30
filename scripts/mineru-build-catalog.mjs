@@ -97,5 +97,6 @@ for (const source of catalog.documents) {
   console.log(`${manifest.length}: ${source.title} — ${entry.pageCoverage}/${source.page_count}`);
   await writeFile(join(root, "parse-manifest.json"), JSON.stringify(manifest, null, 2));
 }
+await writeFile(join(root, "parse-manifest.json"), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify({ documents: manifest.length, complete: manifest.filter((entry) => entry.pageCoverage === entry.totalPages).length,
   coveredPages: manifest.reduce((sum, entry) => sum + entry.pageCoverage, 0), totalPages: manifest.reduce((sum, entry) => sum + entry.totalPages, 0) }));

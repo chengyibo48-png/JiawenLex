@@ -16,6 +16,7 @@ const Input = z.object({
   totalPages: z.number().int().positive().max(100000),
   parsedPages: z.number().int().nonnegative().max(100000),
   idempotencyKey: z.string().uuid(),
+  sourceSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   items: z.array(Item).min(1).max(100),
 });
 type Context = { params: Promise<{ documentId: string }> };
@@ -26,9 +27,10 @@ export async function POST(request: Request, { params }: Context) {
     const { documentId } = await params;
     const input = Input.parse(await request.json());
     if (input.parsedPages > input.totalPages || input.items.some((item) => item.physicalPage > input.totalPages)) throw new HttpError(400, "Page references exceed the parsed document");
-    const { data: document, error: documentError } = await admin.from("source_documents").select("id,page_count,status").eq("id", documentId).eq("owner_id", userId).maybeSingle();
+    const { data: document, error: documentError } = await admin.from("source_documents").select("id,page_count,status,sha256,parsed_pages").eq("id", documentId).eq("owner_id", userId).maybeSingle();
     if (documentError) throw documentError;
     if (!document || document.status !== "ready") throw new HttpError(404, "Original PDF is unavailable");
+    if(input.sourceSha256 && input.sourceSha256!==document.sha256)throw new HttpError(409,"审核包与原始 PDF 不匹配");
     if (document.page_count && document.page_count !== input.totalPages) throw new HttpError(409, "Page count does not match the uploaded document");
     const { data: prior, error: priorError } = await admin.from("source_parse_batches")
       .select("id,document_id,parser,parser_version,total_pages,parsed_pages")
@@ -56,7 +58,7 @@ export async function POST(request: Request, { params }: Context) {
     const { data, error } = await admin.from("source_review_candidates").upsert(rows, { onConflict: "document_id,fingerprint", ignoreDuplicates: true }).select("id");
     if (error) throw error;
     const { error: documentUpdateError } = await admin.from("source_documents").update({
-      page_count: input.totalPages, parse_status: input.parsedPages === input.totalPages ? "review" : "parsing", parsed_pages: Math.max(0, Math.min(input.parsedPages, input.totalPages)),
+      page_count: input.totalPages, parse_status: Math.max(document.parsed_pages,input.parsedPages) === input.totalPages ? "review" : "parsing", parsed_pages: Math.max(document.parsed_pages, input.parsedPages),
     }).eq("id", documentId).eq("owner_id", userId);
     if (documentUpdateError) throw documentUpdateError;
     return NextResponse.json({ batchId, inserted: data?.length ?? 0, duplicate: !!prior }, { status: prior ? 200 : 201 });

@@ -41,6 +41,7 @@ export const sourceQuestionPayload = z.object({
   source_refs: z.array(sourceRef).min(1).max(30),
   reviewed_against_pdf: z.literal(true),
   answer_alignment_checked: z.literal(true),
+  extraction_issues: z.array(z.string()).max(0, "题目仍有识别疑点，请先完成核验").default([]),
 });
 
 export function validateSourceQuestion(input: unknown, documentId: string) {

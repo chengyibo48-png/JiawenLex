@@ -42,6 +42,7 @@ import { syncPendingDrafts } from "@/lib/draft-sync";
 import { dueWords, localDate, startOfWeek } from "@/lib/study";
 import { usePracticeSessions } from "./use-practice-sessions";
 import { practiceMaterials } from "@/lib/practice-sessions";
+import { MethodsView } from "./methods-view";
 import { PracticeView } from "./practice-view";
 import { Modal } from "./modal";
 import {
@@ -61,6 +62,7 @@ const nav: { id: View; zh: string; en: string; icon: typeof House }[] = [
   { id: "vocabulary", zh: "词汇", en: "Vocabulary", icon: Tags },
   { id: "plan", zh: "计划", en: "Plan", icon: CalendarDays },
   { id: "library", zh: "资料库", en: "Library", icon: LibraryBig },
+  { id: "methods", zh: "备考方法", en: "Study guides", icon: BookOpen },
   { id: "progress", zh: "进度", en: "Progress", icon: ChartNoAxesCombined },
   { id: "settings", zh: "设置", en: "Settings", icon: Settings2 },
 ];
@@ -755,6 +757,7 @@ export function Workspace() {
             <VocabularyView data={data} actions={actions} />
           )}
           {view === "plan" && <PlanView data={data} actions={actions} />}
+          {view === "methods" && <MethodsView data={data} actions={actions} />}
           {view === "library" && <LibraryView data={data} actions={actions} />}
           {view === "progress" && (
             <ProgressView data={data} actions={actions} />
@@ -790,7 +793,7 @@ export function Workspace() {
         <button
           className={
             moreOpen ||
-            ["library", "progress", "settings", "admin"].includes(view)
+            ["library", "methods", "progress", "settings", "admin"].includes(view)
               ? "active"
               : ""
           }

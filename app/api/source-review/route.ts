@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+import { apiError, authenticatedDb, HttpError, requireUser } from "@/lib/server-auth";
 import { validateSourceQuestion } from "@/lib/source-question";
 
 const Update = z.object({
   candidateId: z.string().uuid(),
-  action: z.enum(["save", "reject", "publish_question", "publish_vocabulary"]),
+  action: z.enum(["save", "reject", "publish_question", "publish_vocabulary", "publish_guide"]),
+  shared: z.boolean().default(false),
   payload: z.record(z.string(), z.unknown()).optional(),
   contentKind: z.enum(["page_text", "question", "vocabulary", "reference_answer", "figure", "note"]).optional(),
 });
@@ -44,6 +45,8 @@ export async function GET(request: Request) {
     const pageSize = Math.max(1, Math.min(100, Number(params.get("pageSize") ?? 30) || 30));
     const documentId = params.get("documentId");
     const skill = params.get("skill");
+    const kind = params.get("kind");
+    const verified = params.get("verified");
     const pageAuditDocumentId = params.get("pageAuditDocumentId");
     if (pageAuditDocumentId) {
       if (!z.string().uuid().safeParse(pageAuditDocumentId).success) throw new HttpError(400, "Invalid source document");
@@ -62,10 +65,14 @@ export async function GET(request: Request) {
     }
     if (documentId && !z.string().uuid().safeParse(documentId).success) throw new HttpError(400, "Invalid source document");
     if (skill && !["reading", "listening", "writing", "speaking"].includes(skill)) throw new HttpError(400, "Invalid skill");
+    if (kind && !["question","vocabulary","note","page_text","reference_answer","figure"].includes(kind)) throw new HttpError(400, "Invalid content kind");
+    if (verified && verified !== "true") throw new HttpError(400, "Invalid verification filter");
     if (!(["open", "pending", "edited", "rejected", "published", "all"] as const).includes(status as "open")) throw new HttpError(400, "Invalid review status");
     let query = admin.from("source_review_candidates").select("*", { count: "exact" }).eq("owner_id", userId).order("created_at", { ascending: true }).order("id", { ascending: true }).range((page - 1) * pageSize, page * pageSize - 1);
     if (documentId) query = query.eq("document_id", documentId);
     if (skill) query = query.eq("payload->>skill", skill);
+    if (kind) query = query.eq("content_kind", kind);
+    if (verified) query = query.eq("payload->>reviewed_against_pdf", "true");
     if (status === "open") query = query.in("status", ["pending", "edited"]);
     else if (status !== "all") query = query.eq("status", status);
     const { data: candidates, count, error } = await query;
@@ -107,19 +114,37 @@ export async function PATCH(request: Request) {
     if (sourceError) throw sourceError;
     if (!document) throw new HttpError(404, "Source document unavailable");
     const id = candidate.id;
+    if (input.shared && (profile.role !== "admin" || !document.rights_attested_at)) throw new HttpError(403, "组内发布需要管理员及上传者授权声明");
+    if (input.action === "publish_guide") {
+      if (contentKind !== "note" || payload.reviewed_against_pdf !== true) throw new HttpError(400, "方法笔记尚未对照原页核验");
+      if (Array.isArray(payload.extraction_issues) && payload.extraction_issues.length) throw new HttpError(400, "方法笔记仍有识别疑点");
+      const guide = z.object({ title: z.string().trim().min(1).max(500), category: z.enum(["plan","writing_method","answering_strategy","patterns","grammar"]), body: z.string().trim().min(20).max(50000), skill_tags: z.array(z.enum(["reading","listening","writing","speaking"])).max(4) }).parse(payload);
+      const result = await authenticatedDb(request).from("study_guides").upsert({ id, owner_id:userId, ...guide, source_document_id:candidate.document_id, visibility:input.shared?"shared":"private", approval:"approved", license_name:document.license_name||document.rights_attestation||"" });
+      if(result.error) throw result.error;
+      const closed = await admin.from("source_review_candidates").update({payload,content_kind:contentKind,status:"published",updated_at:new Date().toISOString()}).eq("id",id).eq("owner_id",userId);
+      if(closed.error)throw closed.error;
+      return NextResponse.json({published:true,guideId:id});
+    }
     if (input.action === "publish_vocabulary") {
       if (contentKind !== "vocabulary") throw new HttpError(400, "Only vocabulary candidates can be added as word cards");
       if (payload.reviewed_against_pdf !== true) throw new HttpError(400, "词卡尚未对照原页核验");
       const term = String(payload.term ?? "").trim();
       if (!term || term.length > 160) throw new HttpError(400, "A vocabulary entry needs a term");
-      const result = await admin.from("vocabulary").upsert({
-        id, owner_id: userId, term, definition: String(payload.definition ?? "").slice(0, 4000),
+      if (!String(payload.definition ?? "").trim() || (Array.isArray(payload.extraction_issues) && payload.extraction_issues.length)) throw new HttpError(400, "词卡缺少释义或仍有识别疑点");
+      const word = {
+        term, definition: String(payload.definition ?? "").slice(0, 4000),
         example: String(payload.example ?? "").slice(0, 4000), tags: Array.isArray(payload.tags) ? payload.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 30) : [],
-        due_at: new Date().toISOString(), interval_days: 0, streak: 0,
+        part_of_speech:String(payload.part_of_speech??""), pronunciation:String(payload.pronunciation??""), pronunciation_uk:String(payload.pronunciation_uk??""), pronunciation_us:String(payload.pronunciation_us??""),
         source_document_id: candidate.document_id, source_physical_page: candidate.physical_page,
         source_printed_page: candidate.printed_page, source_verified: true,
-      }, { onConflict: "id" });
+      };
+      const result = await admin.rpc("import_word_card",{p_owner:userId,p_id:id,p_key:candidate.fingerprint,p_data:word});
       if (result.error) throw result.error;
+      if(input.shared) {
+        const {source_physical_page: unusedPage,source_printed_page:unusedPrinted,source_verified:unusedVerified,...template}=word;
+        const saved=await admin.from("vocabulary_templates").upsert({id,owner_id:userId,...template,approved:true},{onConflict:"id"});
+        if(saved.error)throw saved.error;
+      }
       const candidateUpdate = await admin.from("source_review_candidates").update({ payload, content_kind: contentKind, status: "published", updated_at: new Date().toISOString() }).eq("id", id).eq("owner_id", userId);
       if (candidateUpdate.error) throw candidateUpdate.error;
       return NextResponse.json({ published: true, vocabularyId: id });
@@ -158,7 +183,7 @@ export async function PATCH(request: Request) {
       attachmentMime = String(audio.metadata?.mimetype);
     }
     const material = {
-      id, owner_id: userId, visibility: "private", approval: "approved",
+      id, owner_id: userId, visibility: input.shared ? "shared" : "private", approval: "approved",
       title: value.title, skill: value.skill, track: value.track,
       origin_kind: value.origin_kind, question_type: value.questionType, prompt: value.prompt,
       passage: value.passage, transcript: value.transcript,
@@ -167,7 +192,7 @@ export async function PATCH(request: Request) {
       file_path: attachmentPath ?? null, file_name: attachmentPath?.split("/").at(-1) ?? null, file_kind: attachmentMime,
       source_document_id: candidate.document_id, source_physical_page: candidate.physical_page, source_printed_page: candidate.printed_page,
     };
-    const { error: materialError } = await admin.from("materials").upsert(material, { onConflict: "id" });
+    const { error: materialError } = await authenticatedDb(request).from("materials").upsert(material, { onConflict: "id" });
     if (materialError) throw materialError;
     const result = await admin.from("source_review_candidates").update({ payload, content_kind: contentKind, status: "published", published_material_id: id, updated_at: new Date().toISOString() }).eq("id", id).eq("owner_id", userId);
     if (result.error) throw result.error;

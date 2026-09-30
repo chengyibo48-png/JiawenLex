@@ -1,4 +1,5 @@
 "use client";
+import { WordMemory } from "./word-memory";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -28,7 +29,6 @@ import {
   generateWeeklyTasks,
   groupAttemptHistory,
   localDate,
-  reviewWord,
   skillLabels,
   skills,
   startOfWeek,
@@ -64,7 +64,6 @@ import { AttemptReviewPanel } from "./attempt-review";
 import { LearningInsights } from "./learning-insights";
 import { MaterialAnnotations, annotationError } from "./material-annotations";
 import { normalizeTerm, kindLabel } from "@/lib/review";
-import { VocabularyQuiz } from "./vocabulary-quiz";
 import { Modal } from "./modal";
 import { mergeProfileDraft } from "@/lib/profile-draft";
 import type { ServiceStatus } from "@/lib/service-status";
@@ -135,7 +134,11 @@ function SkillTag({
 
 export { TodayView } from "./today-view";
 
-export function VocabularyView({ data, actions }: Props) {
+export function VocabularyView(props: Props) {
+  return <WordMemory {...props} manager={<VocabularyManagerView {...props} />} />;
+}
+
+function VocabularyManagerView({ data, actions }: Props) {
   const lang = data.profile.language;
   const [term, setTerm] = useState("");
   const [definition, setDefinition] = useState("");
@@ -143,16 +146,13 @@ export function VocabularyView({ data, actions }: Props) {
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState("");
   const [wordTags, setWordTags] = useState("");
-  const [reviewIndex, setReviewIndex] = useState(0);
   const [wordBusy, setWordBusy] = useState(false);
   const wordLock = useRef(false);
-  const [revealed, setRevealed] = useState(false);
   const wordScope = data.words.filter(
     (word) => !tagFilter || word.tags.includes(tagFilter),
   );
   const tags = [...new Set(data.words.flatMap((word) => word.tags))].sort();
   const due = dueWords(wordScope);
-  const current = due[reviewIndex] ?? due[0];
   const filtered = wordScope
     .filter((word) =>
       (word.term + word.definition)
@@ -165,7 +165,7 @@ export function VocabularyView({ data, actions }: Props) {
     event.preventDefault();
     if (!term.trim() || !definition.trim() || wordLock.current) return;
     const duplicate = data.words.find(
-      (word) => normalizeTerm(word.term) === normalizeTerm(term),
+      (word) => normalizeTerm(word.term) === normalizeTerm(term) && word.definition.trim() === definition.trim(),
     );
     if (duplicate) {
       actions.notify(
@@ -215,22 +215,6 @@ export function VocabularyView({ data, actions }: Props) {
     }
   }
 
-  async function review(known: boolean) {
-    if (!current || wordLock.current) return;
-    wordLock.current = true;
-    setWordBusy(true);
-    try {
-      await actions.upsert("vocabulary", "words", reviewWord(current, known));
-      setRevealed(false);
-      setReviewIndex(0);
-    } catch {
-      /* Workspace displays errors. */
-    } finally {
-      wordLock.current = false;
-      setWordBusy(false);
-    }
-  }
-
   return (
     <div className="page-stack">
       <div className="page-intro">
@@ -258,8 +242,6 @@ export function VocabularyView({ data, actions }: Props) {
           value={tagFilter}
           onChange={(event) => {
             setTagFilter(event.target.value);
-            setRevealed(false);
-            setReviewIndex(0);
           }}
         >
           <option value="">{t(lang, "全部词汇", "All words")}</option>
@@ -271,60 +253,6 @@ export function VocabularyView({ data, actions }: Props) {
         </select>
       </label>
       <div className="two-column">
-        <section className="card review-card">
-          <div className="card-top">
-            <h3>{t(lang, "现在复习", "Review now")}</h3>
-            <span className="muted small">
-              {due.length ? `1 / ${due.length}` : "0 / 0"}
-            </span>
-          </div>
-          {current ? (
-            <>
-              <div className="flashcard">
-                <span className="eyebrow">WORD CARD</span>
-                <strong>{current.term}</strong>
-                {revealed ? (
-                  <div className="flashcard-answer">
-                    <p>{current.definition}</p>
-                    {current.example && <em>{current.example}</em>}
-                  </div>
-                ) : (
-                  <button
-                    className="button secondary"
-                    onClick={() => setRevealed(true)}
-                  >
-                    {t(lang, "显示释义", "Reveal meaning")}
-                  </button>
-                )}
-              </div>
-              {revealed && (
-                <div className="button-row">
-                  <button
-                    className="button secondary grow"
-                    disabled={wordBusy}
-                    onClick={() => void review(false)}
-                  >
-                    {t(lang, "不认识", "Not known")}
-                  </button>
-                  <button
-                    className="button primary grow"
-                    disabled={wordBusy}
-                    onClick={() => void review(true)}
-                  >
-                    {t(lang, "认识", "Known")}
-                  </button>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="empty-inline">
-              <CheckCircle2 size={27} />
-              <strong>
-                {t(lang, "今天的词汇已复习完", "No words due today")}
-              </strong>
-            </div>
-          )}
-        </section>
         <section className="card">
           <h3>{t(lang, "加入新词", "Add a word")}</h3>
           <form
@@ -379,13 +307,6 @@ export function VocabularyView({ data, actions }: Props) {
         </section>
       </div>
       <SpellingPractice words={filtered} data={data} actions={actions} />
-      <VocabularyQuiz
-        words={filtered}
-        lang={lang}
-        onReview={(word, known) =>
-          actions.upsert("vocabulary", "words", reviewWord(word, known))
-        }
-      />
       <section className="card">
         <div className="card-top">
           <div>

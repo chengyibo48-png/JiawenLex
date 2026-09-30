@@ -143,6 +143,10 @@ export const recoveryTables = [
   "source_review_candidates",
   "source_page_audit",
   "question_error_reports",
+  "study_guides",
+  "vocabulary_templates",
+  "vocabulary_review_events",
+  "word_error_reports",
 ];
 export function recoveryTableData(toc) {
   const selected = [],
