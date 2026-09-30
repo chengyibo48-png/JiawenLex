@@ -1,0 +1,63 @@
+import { createHash } from "node:crypto";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { apiError, HttpError, requireUser } from "@/lib/server-auth";
+
+const Item = z.object({
+  physicalPage: z.number().int().positive().max(100000),
+  printedPage: z.string().max(100).default(""),
+  sectionTitle: z.string().max(500).default(""),
+  contentKind: z.enum(["page_text", "question", "vocabulary", "reference_answer", "figure", "note"]),
+  payload: z.record(z.string(), z.unknown()),
+});
+const Input = z.object({
+  parser: z.string().trim().min(1).max(80).default("MinerU"),
+  parserVersion: z.string().max(80).default(""),
+  totalPages: z.number().int().positive().max(100000),
+  parsedPages: z.number().int().nonnegative().max(100000),
+  idempotencyKey: z.string().uuid(),
+  items: z.array(Item).min(1).max(100),
+});
+type Context = { params: Promise<{ documentId: string }> };
+
+function fingerprint(item: z.infer<typeof Item>) {
+  return createHash("sha256").update(JSON.stringify([item.physicalPage, item.printedPage, item.sectionTitle, item.contentKind, item.payload])).digest("hex");
+}
+
+export async function POST(request: Request, { params }: Context) {
+  try {
+    const { userId, admin } = await requireUser(request);
+    const { documentId } = await params;
+    const input = Input.parse(await request.json());
+    if (input.parsedPages > input.totalPages || input.items.some((item) => item.physicalPage > input.totalPages)) throw new HttpError(400, "Page references exceed the parsed document");
+    const { data: document, error: documentError } = await admin.from("source_documents").select("id,page_count,status").eq("id", documentId).eq("owner_id", userId).maybeSingle();
+    if (documentError) throw documentError;
+    if (!document || document.status !== "ready") throw new HttpError(404, "Original PDF is unavailable");
+    if (document.page_count && document.page_count !== input.totalPages) throw new HttpError(409, "Page count does not match the uploaded document");
+    const { data: prior, error: priorError } = await admin.from("source_parse_batches").select("id").eq("owner_id", userId).eq("idempotency_key", input.idempotencyKey).maybeSingle();
+    if (priorError) throw priorError;
+    if (prior) {
+      const { count, error } = await admin.from("source_review_candidates").select("id", { count: "exact", head: true }).eq("batch_id", prior.id);
+      if (error) throw error;
+      return NextResponse.json({ batchId: prior.id, inserted: count ?? 0, duplicate: true });
+    }
+    const { data: batch, error: batchError } = await admin.from("source_parse_batches").insert({
+      owner_id: userId, document_id: documentId, parser: input.parser, parser_version: input.parserVersion,
+      total_pages: input.totalPages, parsed_pages: input.parsedPages,
+      status: input.parsedPages === input.totalPages ? "review" : "parsing", idempotency_key: input.idempotencyKey,
+    }).select("id").single();
+    if (batchError) throw batchError;
+    const rows = input.items.map((item) => ({
+      owner_id: userId, document_id: documentId, batch_id: batch.id,
+      fingerprint: fingerprint(item), physical_page: item.physicalPage, printed_page: item.printedPage,
+      section_title: item.sectionTitle, content_kind: item.contentKind, payload: item.payload,
+    }));
+    const { data, error } = await admin.from("source_review_candidates").upsert(rows, { onConflict: "document_id,fingerprint", ignoreDuplicates: true }).select("id");
+    if (error) throw error;
+    const { error: documentUpdateError } = await admin.from("source_documents").update({
+      page_count: input.totalPages, parse_status: input.parsedPages === input.totalPages ? "review" : "parsing", parsed_pages: Math.max(0, Math.min(input.parsedPages, input.totalPages)),
+    }).eq("id", documentId).eq("owner_id", userId);
+    if (documentUpdateError) throw documentUpdateError;
+    return NextResponse.json({ batchId: batch.id, inserted: data?.length ?? 0, duplicate: false }, { status: 201 });
+  } catch (error) { return apiError(error); }
+}

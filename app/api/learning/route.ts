@@ -3,7 +3,7 @@ import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 import { materialStamp } from "@/lib/practice-sessions";
 import { snapshotMaterial } from "@/lib/review";
-import { isCorrectAnswer } from "@/lib/study";
+import { isCorrectAnswer, isGradableQuestion } from "@/lib/study";
 import type { Material } from "@/lib/types";
 const Input = z.object({
   id: z.string().uuid(),
@@ -71,14 +71,12 @@ export async function POST(request: Request) {
         409,
         "资料已经更新，作答仍保留；请保留副本后重新开始。 / Material changed; keep a copy and restart.",
       );
-    if (
-      !input.intensive &&
-      (!m.questions.length || m.questions.some((q) => !q.answers?.length))
-    )
+    if (!input.intensive && !m.questions.length)
       throw new HttpError(
         400,
-        "资料缺少题目或参考答案，无法判分 / Missing questions or accepted answers",
+        "资料缺少题目，无法提交 / Material has no questions",
       );
+    const gradable = m.questions.filter(isGradableQuestion);
     const payload = {
       id: input.id,
       owner_id: userId,
@@ -91,13 +89,13 @@ export async function POST(request: Request) {
       flagged: input.flagged.filter((id) =>
         m.questions.some((q) => q.id === id),
       ),
-      correct_count: m.questions.filter((q) =>
+      correct_count: gradable.length ? gradable.filter((q) =>
         isCorrectAnswer(q, input.answers[q.id] ?? ""),
-      ).length,
-      question_count: m.questions.length,
-      question_stats: [
+      ).length : null,
+      question_count: gradable.length ? gradable.length : null,
+      question_stats: gradable.length ? [
         ...new Set(
-          m.questions.map((q) => q.type || m.question_type || "Other"),
+          gradable.map((q) => q.type || m.question_type || "Other"),
         ),
       ].map((type) => {
         const questions = m.questions.filter(
@@ -110,7 +108,7 @@ export async function POST(request: Request) {
             isCorrectAnswer(q, input.answers[q.id] ?? ""),
           ).length,
         };
-      }),
+      }) : [],
     };
     const saved = await admin.rpc("submit_objective_attempt", {
       payload,

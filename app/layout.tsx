@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./source-library.css";
 import { brandAssets } from "@/lib/brand";
 
 export const metadata: Metadata = {

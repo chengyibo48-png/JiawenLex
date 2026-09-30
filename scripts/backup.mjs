@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { createClient } from "@supabase/supabase-js";
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { encryptionKey, encrypt, decrypt, hash, snapshotPrefix, validateManifest, validateBytes, assertRecoveryTarget, deletionReplaySql, verifyThenPrune, recoveryTables, recoveryTableData } from "./backup-core.mjs";
 
 import { backupLimits, storedBackupBytes, assertBackupCapacity, removeBackupSnapshot } from "../lib/backup-capacity.ts";
@@ -22,14 +22,14 @@ const bucket = required("BACKUP_S3_BUCKET");
 const key = encryptionKey(required("BACKUP_ENCRYPTION_SECRET"));
 const limits = backupLimits(process.env);
 let occupiedBytes = null, snapshotWriteBytes = 0;
-async function put(name, plain) {
+async function put(name, plain, { snapshot = true, metadata } = {}) {
   const body = encrypt(plain, key);
-  if (mode === "backup") assertBackupCapacity(snapshotWriteBytes, body.length, limits.snapshotBytes);
+  if (mode === "backup" && snapshot) assertBackupCapacity(snapshotWriteBytes, body.length, limits.snapshotBytes);
   if (occupiedBytes === null) occupiedBytes = await storedBackupBytes(s3, bucket, limits.versioned);
   assertBackupCapacity(occupiedBytes, body.length, limits.storageBytes);
-  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: name, Body: body, ContentType: "application/octet-stream" }));
+  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: name, Body: body, ContentType: "application/octet-stream", ...(metadata ? { Metadata: metadata } : {}) }));
   occupiedBytes += body.length;
-  if (mode === "backup") snapshotWriteBytes += body.length;
+  if (mode === "backup" && snapshot) snapshotWriteBytes += body.length;
 }
 async function get(name) {
   const object = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: name }));
@@ -89,6 +89,28 @@ async function completeSnapshots() {
   }
   return complete;
 }
+function sourceReader() {
+  return {
+    client: new S3Client({
+      endpoint: required("SOURCE_S3_ENDPOINT"),
+      region: required("SOURCE_S3_REGION"),
+      forcePathStyle: true,
+      credentials: { accessKeyId: required("SOURCE_BACKUP_S3_ACCESS_KEY_ID"), secretAccessKey: required("SOURCE_BACKUP_S3_SECRET_ACCESS_KEY") },
+    }),
+    bucket: required("SOURCE_S3_BUCKET"),
+  };
+}
+function sourceRestorer() {
+  return {
+    client: new S3Client({
+      endpoint: required("SOURCE_S3_ENDPOINT"),
+      region: required("SOURCE_S3_REGION"),
+      forcePathStyle: true,
+      credentials: { accessKeyId: required("SOURCE_RESTORE_S3_ACCESS_KEY_ID"), secretAccessKey: required("SOURCE_RESTORE_S3_SECRET_ACCESS_KEY") },
+    }),
+    bucket: required("SOURCE_S3_BUCKET"),
+  };
+}
 async function latestSnapshot() {
   if (process.env.SNAPSHOT_PREFIX) return snapshotPrefix(process.env.SNAPSHOT_PREFIX);
   const names = await completeSnapshots();
@@ -100,7 +122,7 @@ async function backup() {
   let activePrefix, verified = false;
   try {
     const dumpPath = join(dir, "database.dump");
-    await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--file", dumpPath], required("DATABASE_URL"));
+    await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--exclude-table-data=public.source_import_tokens", "--exclude-table-data=public.source_upload_sessions", "--file", dumpPath], required("DATABASE_URL"));
     const dump = await readFile(dumpPath);
     const prefix = `snapshots/${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}/`;
     activePrefix = prefix;
@@ -117,11 +139,39 @@ async function backup() {
         files.push({ bucket: bucketName, path, objectKey, sha256: hash(bytes), bytes: bytes.length, ...(data.type && /^[\w.+-]+\/[\w.+-]+$/.test(data.type) ? { contentType: data.type } : {}) });
       }
     }
-    const manifest = { version: 2, at: new Date().toISOString(), database: { objectKey: `${prefix}database.jlex`, sha256: hash(dump), bytes: dump.length }, files };
+    const { data: sourceRows, error: sourceRowsError } = await client.from("source_documents").select("object_key,sha256,byte_size").eq("status", "ready").order("object_key");
+    if (sourceRowsError) throw sourceRowsError;
+    const sourceStore = sourceRows?.length ? sourceReader() : null;
+    const sources = [];
+    for (const row of sourceRows ?? []) {
+      const bytes = Number(row.byte_size);
+      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > 536870912 || !/^[a-f\d]{64}$/.test(row.sha256)) throw new Error("Invalid source document metadata in database snapshot");
+      const objectKey = `source-objects/${row.sha256}.jlex`;
+      let alreadyStored = false;
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: objectKey }));
+        if (head.ContentLength !== bytes + 33 || head.Metadata?.sha256 !== row.sha256 || head.Metadata?.bytes !== String(bytes)) {
+          const previous = validateBytes(await get(objectKey), { bytes, sha256: row.sha256 });
+          if (previous.length !== bytes) throw new Error("Existing source backup object is invalid");
+        }
+        alreadyStored = true;
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (status !== 404 && error?.name !== "NotFound" && error?.name !== "NoSuchKey") throw error;
+      }
+      if (!alreadyStored) {
+        const sourceObject = await sourceStore.client.send(new GetObjectCommand({ Bucket: sourceStore.bucket, Key: row.object_key }));
+        const original = validateBytes(Buffer.from(await sourceObject.Body.transformToByteArray()), { bytes, sha256: row.sha256 });
+        await put(objectKey, original, { snapshot: false, metadata: { sha256: row.sha256, bytes: String(bytes) } });
+        validateBytes(await get(objectKey), { bytes, sha256: row.sha256 });
+      }
+      sources.push({ sourceKey: row.object_key, objectKey, sha256: row.sha256, bytes });
+    }
+    const manifest = { version: 3, at: new Date().toISOString(), database: { objectKey: `${prefix}database.jlex`, sha256: hash(dump), bytes: dump.length }, files, sources };
     // Upload, download and verify the new snapshot before it can displace an old one.
     await put(`${prefix}manifest.jlex`, Buffer.from(JSON.stringify(manifest)));
     await verifyThenPrune(prefix, {
-      verify: async (selected) => { await verify(selected); verified = true; },
+      verify: async (selected) => { await verify(selected, { verifySources: false }); verified = true; },
       snapshots: completeSnapshots,
       remove: (previous) => removeBackupSnapshot(s3, bucket, limits.versioned, previous),
     });
@@ -137,11 +187,19 @@ async function backup() {
 async function readManifest(prefix) {
   return validateManifest(JSON.parse((await get(`${prefix}manifest.jlex`)).toString()), prefix);
 }
-async function verify(selectedPrefix) {
+async function verify(selectedPrefix, { verifySources = true } = {}) {
   const prefix = selectedPrefix ?? await latestSnapshot();
   const manifest = await readManifest(prefix);
   const dump = validateBytes(await get(manifest.database.objectKey), manifest.database);
   for (const file of manifest.files) validateBytes(await get(file.objectKey), file);
+  for (const source of manifest.sources ?? []) {
+    if (verifySources) validateBytes(await get(source.objectKey), source);
+    else {
+      const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: source.objectKey }));
+      if (head.ContentLength !== source.bytes + 33 || head.Metadata?.sha256 !== source.sha256 || head.Metadata?.bytes !== String(source.bytes))
+        throw new Error("Source archive object is missing or has invalid metadata; run a full snapshot verification");
+    }
+  }
   const dir = await mkdtemp(join(tmpdir(), "jiawenlex-verify-"));
   try { const path = join(dir, "database.dump"); await writeFile(path, dump); await run("pg_restore", ["--list", path]); }
   finally { await cleanTemp(dir); }
@@ -188,7 +246,28 @@ async function restoreFiles() {
     if (uploadError) throw uploadError;
     restored++;
   }
-  console.log(`Restored ${restored} still-authorized file(s)`);
+  let restoredSources = 0;
+  if (manifest.sources?.length) {
+    const destination = sourceRestorer();
+    for (const source of manifest.sources) {
+      const { data: document, error } = await client.from("source_documents").select("id,owner_id,object_key,sha256,byte_size")
+        .eq("object_key", source.sourceKey).eq("sha256", source.sha256).eq("byte_size", source.bytes).eq("status", "ready").maybeSingle();
+      if (error) throw error;
+      // Deletion replay removes the database row, so old private originals cannot reappear.
+      if (!document) continue;
+      const bytes = validateBytes(await get(source.objectKey), source);
+      try {
+        const existing = await destination.client.send(new GetObjectCommand({ Bucket: destination.bucket, Key: source.sourceKey }));
+        validateBytes(Buffer.from(await existing.Body.transformToByteArray()), source);
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (status !== 404 && error?.name !== "NotFound" && error?.name !== "NoSuchKey") throw error;
+        await destination.client.send(new PutObjectCommand({ Bucket: destination.bucket, Key: source.sourceKey, Body: bytes, ContentType: "application/pdf", Metadata: { "document-id": document.id, "owner-id": document.owner_id, sha256: source.sha256 } }));
+        restoredSources++;
+      }
+    }
+  }
+  console.log(`Restored ${restored} authorized attachment(s) and ${restoredSources} original PDF(s)`);
 }
 
 async function download() {

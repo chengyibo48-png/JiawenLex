@@ -38,7 +38,10 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
     `);
     for (const name of (await fs.readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) {
       // No pgcrypto functionality is used: SHA256 and UUID functions are built into PostgreSQL.
-      const sql = (await fs.readFile(new URL(name, migrations), "utf8")).replace("create extension if not exists pgcrypto;", "");
+      const sql = (await fs.readFile(new URL(name, migrations), "utf8"))
+        .replace("create extension if not exists pgcrypto;", "")
+        .replace("create extension if not exists pg_cron;", "")
+        .replace("create extension if not exists pg_net;", "");
       await pg.exec(sql);
     }
     await t.test("Existing invitation, isolation, sharing and member-removal regression suite", async () => {
@@ -50,6 +53,67 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
     for (const [id, name] of [[owner, "Owner"], [recipient, "Recipient"]]) {
       await pg.query("insert into auth.users(id,email,raw_user_meta_data) values ($1,$2,$3)", [id, name + "@example.invalid", JSON.stringify({ invite_code: fixtureInvite, display_name: name })]);
     }
+    await t.test("Original archive and correction rows are service API only", async () => {
+      for (const table of ["source_documents", "source_upload_sessions", "source_parse_batches", "source_review_candidates", "source_import_tokens", "question_error_reports"]) {
+        const result = await pg.query(
+          "select has_table_privilege('anon',$1,'select') as anon_read, has_table_privilege('authenticated',$1,'select') as member_read, has_table_privilege('authenticated',$1,'insert') as member_insert, has_table_privilege('authenticated',$1,'update') as member_update, has_table_privilege('authenticated',$1,'delete') as member_delete",
+          ["public." + table],
+        );
+        assert.deepEqual(result.rows[0], {
+          anon_read: false, member_read: false, member_insert: false, member_update: false, member_delete: false,
+        });
+      }
+    });
+    await t.test("Question corrections require the owner and reject stale snapshots", async () => {
+      const materialId = "00000000-0000-4000-8000-000000000010";
+      const originalQuestion = { id: "q1", prompt: "What is the answer?", answers: ["one"], explanation: "Original explanation" };
+      const expected = { prompt: originalQuestion.prompt, answers: originalQuestion.answers, explanation: originalQuestion.explanation };
+      await pg.exec("begin");
+      try {
+        await pg.query(
+          "insert into public.materials(id,owner_id,title,skill,visibility,approval,questions) values ($1,$2,'Correction fixture','reading','private','approved',$3)",
+          [materialId, owner, JSON.stringify([originalQuestion])],
+        );
+        await pg.exec("set local role service_role");
+        const submitted = await pg.query(
+          "select * from public.submit_question_error_report($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+          [materialId, "q1", recipient, "answer", "Answer should include another variant", JSON.stringify(expected), null, JSON.stringify(["one", "a single unit"]), null],
+        );
+        assert.equal(submitted.rows[0].direct_edit, false);
+        const reportId = submitted.rows[0].report_id;
+        await denied(
+          pg,
+          () => pg.query("select public.apply_question_error_report($1,$2,$3)", [reportId, recipient, "Unauthorized edit"]),
+          /report_unavailable/,
+        );
+        await pg.query(
+          "select public.apply_question_error_report($1,$2,$3,null,$4)",
+          [reportId, owner, null, "Reviewed explanation"],
+        );
+        const applied = (await pg.query("select questions,revision from public.materials where id=$1", [materialId])).rows[0];
+        assert.deepEqual(applied.questions[0].answers, ["one", "a single unit"]);
+        assert.equal(applied.questions[0].explanation, "Reviewed explanation");
+        assert.equal(applied.revision, 2);
+        assert.equal((await pg.query("select status from public.question_error_reports where id=$1", [reportId])).rows[0].status, "applied");
+
+        const updatedQuestion = applied.questions[0];
+        const staleExpected = { prompt: updatedQuestion.prompt, answers: updatedQuestion.answers, explanation: updatedQuestion.explanation };
+        const stale = await pg.query(
+          "select * from public.submit_question_error_report($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+          [materialId, "q1", recipient, "grammar", "Prompt wording is awkward", JSON.stringify(staleExpected), "Suggested prompt", null, null],
+        );
+        const staleReportId = stale.rows[0].report_id;
+        const changedQuestion = { ...updatedQuestion, prompt: "A newer prompt" };
+        await pg.query("update public.materials set questions=$2 where id=$1", [materialId, JSON.stringify([changedQuestion])]);
+        await denied(
+          pg,
+          () => pg.query("select public.apply_question_error_report($1,$2)", [staleReportId, owner]),
+          /question_changed_since_report/,
+        );
+        assert.equal((await pg.query("select status from public.question_error_reports where id=$1", [staleReportId])).rows[0].status, "pending");
+        assert.equal((await pg.query("select questions->0->>'prompt' as prompt from public.materials where id=$1", [materialId])).rows[0].prompt, "A newer prompt");
+      } finally { await pg.exec("rollback"); }
+    });
     await pg.query("insert into auth.sessions(id,user_id) values ($1,$2)", [session, owner]);
     await pg.query("insert into public.study_tasks(id,owner_id,week_start,planned_date,skill,title,minutes,status,source) values ($1,$2,$3,$3,'reading','Original task',30,'todo','rule')", [taskId, owner, planWeek]);
     await t.test("Invalid replacement rolls back deletion", async () => {

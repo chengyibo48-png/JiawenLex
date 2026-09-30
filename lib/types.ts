@@ -55,6 +55,10 @@ export interface Question {
   choices?: string[];
   checklist?: string[];
   evidence?: import("./review").Evidence;
+  source_document_id?: string;
+  source_physical_page?: number;
+  source_printed_page?: string;
+  verified?: boolean;
   id: string;
   type: string;
   prompt: string;
@@ -93,6 +97,9 @@ export interface Material {
   file_path: string | null;
   file_name: string | null;
   file_kind: string | null;
+  source_document_id?: string | null;
+  source_physical_page?: number | null;
+  source_printed_page?: string;
   created_at: string;
 }
 
@@ -139,6 +146,10 @@ export interface VocabularyWord {
   streak: number;
   last_reviewed_at: string | null;
   created_at: string;
+  source_document_id?: string | null;
+  source_physical_page?: number | null;
+  source_printed_page?: string;
+  source_verified?: boolean;
 }
 
 export interface WritingDraft {

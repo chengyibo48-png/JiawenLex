@@ -90,12 +90,35 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 
 ### 应用容量保护
 
-- 默认总容量上限：**8,000,000,000 字节（8 GB）**；可以用 `BACKUP_MAX_STORAGE_BYTES` 降低，代码拒绝设置得更高。
+- 默认总容量上限现为 **6,000,000,000 字节（6 GB）**；为原始 PDF bucket 的 3 GB 上限预留同一 B2 账号中的存储空间，并给版本与删除标记留下约 1 GB 余量。可以用 `BACKUP_MAX_STORAGE_BYTES` 降低，代码拒绝设置得更高。
 - 默认单次备份写入上限：**500,000,000 字节（500 MB）**；可以用 `BACKUP_MAX_SNAPSHOT_BYTES` 降低。这是写入量限制，不是供应商的下载费用限制。
 - 计入加密开销、全部对象和 B2 历史版本。不能核实占用时暂停写入；容量不足时保留已有恢复点，不删除旧备份来强行挤出空间。只有新快照验证成功后，才按既有规则清理超出最近四份范围的旧快照及其全部版本。
 - 失败时尝试清理本次产生的未验证快照；不清理其他快照或删除记录。GitHub 备份工作流串行执行。
 - 应用预检查是额外保护，无法控制其他工具、同账号其他 bucket 的用量，也不能代替供应商的 0 元限制。并发写入有可能发生在同一次预检查之后；供应商限额是防止计费的最终控制。
 - 在免费配置下，超过下载或请求限制可能导致校验 / 恢复暂停。保持 0 元限制，确认额度恢复后再重试；没有完成完整性校验的快照不标记成功。
+
+### 原始 PDF 私有存储与增量备份
+
+大 PDF 保存在单独的私有 bucket；每周数据库快照引用按 SHA-256 加密保存的 PDF 对象，同一内容只复制一次。原始资料 bucket 上限为 3 GB，备份 bucket 上限为 6 GB；两者应位于同一 B2 免费账号内，总应用上限为 9 GB，为供应商版本和删除标记留出余量。达到任一上限时暂停新写入，不会自动升级或付费。
+
+1. 在同一 B2 账号新增私有 bucket，例如 `jiawenlex-originals-chengyibo48`。保持 bucket 为 **Private**，不要为 `originals/` 或 `source-objects/` 配置到期删除。
+2. 在 bucket 的 CORS 中只允许 `https://jiawen-lex.vercel.app` 和 `http://localhost:3000`。S3-compatible API 规则使用 `GET`、`PUT`、`HEAD`，Allowed Headers 设 `*`，Expose Header 包含 `ETag`。分片上传需要浏览器读取 ETag 才能完成。
+3. 为未完成的分片上传配置 **7 天后 AbortIncompleteMultipartUpload**。不要给已完成原始 PDF 设置过期规则。参照 [B2 S3 生命周期配置](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration) 与 [CORS 规则](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules)。
+4. 创建两个只授权这个原始资料 bucket 的应用密钥：一个 **Read and Write** 给 Vercel 上传，另一个 **Read Only** 给 GitHub 每周备份。不要复用备份 bucket 密钥。
+5. 将下面变量填入 Vercel Production 并 Redeploy。`SOURCE_MAX_STORAGE_BYTES` 固定为 `3000000000`，用于应用层暂停保护。
+
+| Vercel 变量 | 来源 |
+| --- | --- |
+| `SOURCE_S3_ENDPOINT` | B2 S3 Endpoint，前面加 `https://` |
+| `SOURCE_S3_REGION` | Endpoint 对应区域 |
+| `SOURCE_S3_BUCKET` | 原始资料 bucket 名 |
+| `SOURCE_S3_ACCESS_KEY_ID` | 原始资料 bucket 的 Read and Write keyID |
+| `SOURCE_S3_SECRET_ACCESS_KEY` | 对应 applicationKey |
+| `SOURCE_MAX_STORAGE_BYTES` | `3000000000` |
+
+6. 把同一 endpoint、region、bucket，以及 Read Only 密钥的 `SOURCE_BACKUP_S3_ACCESS_KEY_ID`、`SOURCE_BACKUP_S3_SECRET_ACCESS_KEY` 加到 GitHub Actions Secrets。不要把 Vercel 的 Read and Write key 放入每周备份工作流。
+
+备份对每个唯一 PDF SHA-256 加密存一份，后续快照引用相同对象；每周验证数据库和引用，每月恢复演练会读取并校验 PDF 全文。恢复演练需要临时提供 `SOURCE_RESTORE_S3_ACCESS_KEY_ID` / `SOURCE_RESTORE_S3_SECRET_ACCESS_KEY`（具备原始资料 bucket 写权限），只用于把授权且未删除的资料恢复到目标存储。删除账号时，网站会清除该成员原始 bucket 中的全部对象版本；加密备份对象仍按内容寻址保存，不会被恢复到已删除的资料记录。备份中的旧哈希对象目前不会自动清除；达到 6 GB 容量保护时，备份会暂停并要求维护者检查空间。
 
 2026-09-29 用户截图已确认 B2 账号创建完成：存储上限 $0 / 10 GB，下载上限 $0 / 每天 1 GB，Class B 与 C 各每天最多 2,500 次，邮件提醒已勾选。私有 bucket `jiawenlex-backups-chengyibo48` 已创建，Endpoint 为 `s3.us-west-004.backblazeb2.com`，加密已开启、Object Lock 已关闭、生命周期为保留全部版本。本机六项备份配置已填写。真实 B2 检查通过：HeadBucket、全部历史版本清单（当前 0 字节）、103 字节随机检查内容的加密上传、下载解密一致性检查，以及按版本删除；复查确认无检查文件残留。检查不包含数据库或学习内容。线上与 GitHub 工作流凭据、数据库连接、完整备份和恢复仍待完成。应用限制已加入代码，并通过本机 13 项模拟检查及 TypeScript 检查；含这些限制的 Vercel 部署已成功。
 
@@ -113,7 +136,7 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 ### 每周备份：在 GitHub 执行
 
 1. Supabase 项目点击 **Connect**，选择 **Session pooler** 连接（非 Transaction pooler）。将完整连接串填入本机 `DATABASE_URL`，其中 PASSWORD 是 **数据库密码**，不是邮箱密码或 API Key；特殊字符需按连接串要求编码。
-2. GitHub 仓库 → **Settings → Secrets and variables → Actions → New repository secret**，逐个填写：`DATABASE_URL`、`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SECRET_KEY` 和六个 `BACKUP_*` 变量。数据库连接仅给备份工作机使用，无需放进浏览器或 Vercel。
+2. GitHub 仓库 → **Settings → Secrets and variables → Actions → New repository secret**，逐个填写：`DATABASE_URL`、`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SECRET_KEY`、六个 `BACKUP_*` 变量，以及本节所列五个原始资料 bucket / Read Only `SOURCE_BACKUP_S3_*` 变量。数据库连接仅给备份工作机使用，无需放进浏览器或 Vercel。
 3. GitHub → **Actions → Encrypted weekly backup → Run workflow**，观察是否成功。流程使用 PostgreSQL 17 客户端，备份后自动下载、解密并校验；校验成功后才保留最近四份已验证快照。
 4. 保存第一次成功的时间与快照前缀，安排下面的真实恢复演练。GitHub 的定时任务可能延迟，应定期查看实际运行记录。
 

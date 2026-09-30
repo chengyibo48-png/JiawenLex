@@ -10,10 +10,12 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "services:check": "node scripts/run-services.mjs check",
+    "originals": "node scripts/run-services.mjs originals",
     "backup": "node scripts/run-services.mjs backup"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/s3-request-presigner": "3.1141.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.2",
     "lucide-react": "latest",

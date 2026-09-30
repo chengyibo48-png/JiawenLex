@@ -30,7 +30,7 @@ import { useWritingDraft } from "./use-writing-draft";
 import { AnnotatedResponse } from "./annotated-response";
 import { apiFetch, demoMode } from "@/lib/supabase";
 import { snapshotMaterial } from "@/lib/review";
-import { isCorrectAnswer, skillLabels } from "@/lib/study";
+import { isCorrectAnswer, isGradableQuestion, skillLabels } from "@/lib/study";
 import type {
   Attempt,
   Feedback,
@@ -503,7 +503,7 @@ export function PracticeView({
   }
 
   function scoreQuestions(questions: Question[]) {
-    return questions.filter((question) =>
+    return questions.filter(isGradableQuestion).filter((question) =>
       isCorrectAnswer(question, answers[question.id] ?? ""),
     ).length;
   }
@@ -570,7 +570,8 @@ export function PracticeView({
     submissionLock.current = true;
     setBusy(true);
     try {
-      const count = selected.questions.length;
+      const gradedQuestions = selected.questions.filter(isGradableQuestion);
+      const count = gradedQuestions.length;
       const attempt: Attempt = {
         id: (attemptId.current ??= crypto.randomUUID()),
         owner_id: data.profile.id,
@@ -578,8 +579,8 @@ export function PracticeView({
         skill: selected.skill,
         mode,
         duration_seconds: currentElapsed(),
-        correct_count: scoreQuestions(selected.questions),
-        question_count: count,
+        correct_count: count ? scoreQuestions(gradedQuestions) : null,
+        question_count: count || null,
         answer_body: { ...answers },
         feedback: null,
         transcript: null,
@@ -587,12 +588,12 @@ export function PracticeView({
         saved_recording: false,
         question_stats: [
           ...new Set(
-            selected.questions.map(
+            gradedQuestions.map(
               (q) => q.type || selected.question_type || "Other",
             ),
           ),
         ].map((type) => {
-          const questions = selected.questions.filter(
+          const questions = gradedQuestions.filter(
             (q) => (q.type || selected.question_type || "Other") === type,
           );
           return {
@@ -1327,6 +1328,8 @@ export function PracticeView({
               <QuestionPractice
                 material={selected}
                 lang={lang}
+                client={actions.client}
+                notify={actions.notify}
                 state={{ ...questionState, mode, durationMinutes, startedAt }}
                 answers={answers}
                 revealed={revealed}

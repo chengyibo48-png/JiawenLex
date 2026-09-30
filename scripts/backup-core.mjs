@@ -42,11 +42,13 @@ export function snapshotPrefix(value) {
 export function validateManifest(manifest, prefix) {
   snapshotPrefix(prefix);
   if (
-    ![1, 2].includes(manifest?.version) ||
+    ![1, 2, 3].includes(manifest?.version) ||
     !Number.isFinite(Date.parse(manifest.at)) ||
     !Array.isArray(manifest.files)
   )
     throw new Error("Invalid backup manifest");
+  if (manifest.version >= 3 && !Array.isArray(manifest.sources))
+    throw new Error("Invalid source document manifest");
   const entries = [manifest.database, ...manifest.files];
   const keys = new Set(),
     paths = new Set();
@@ -87,6 +89,21 @@ export function validateManifest(manifest, prefix) {
       paths.add(`${item.bucket}/${item.path}`);
     }
   }
+  const sources = manifest.sources ?? [];
+  const sourceKeys = new Set();
+  for (const source of sources) {
+    if (
+      !source ||
+      typeof source.sourceKey !== "string" ||
+      !/^originals\/[a-f\d-]{36}\/[a-f\d-]{36}\/[^/\\\x00-\x1f]+\.pdf$/i.test(source.sourceKey) ||
+      source.sourceKey.split("/").some((part) => !part || part === "." || part === "..") ||
+      !/^[a-f\d]{64}$/.test(source.sha256) ||
+      source.objectKey !== `source-objects/${source.sha256}.jlex` ||
+      !Number.isSafeInteger(source.bytes) || source.bytes < 1 || source.bytes > 536870912 ||
+      sourceKeys.has(source.sourceKey)
+    ) throw new Error("Invalid source document backup entry");
+    sourceKeys.add(source.sourceKey);
+  }
   return manifest;
 }
 export function validateBytes(bytes, entry) {
@@ -121,6 +138,10 @@ export const recoveryTables = [
   "material_versions",
   "micro_sessions",
   "micro_attempts",
+  "source_documents",
+  "source_parse_batches",
+  "source_review_candidates",
+  "question_error_reports",
 ];
 export function recoveryTableData(toc) {
   const selected = [],

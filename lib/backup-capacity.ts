@@ -1,6 +1,8 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, ListObjectVersionsCommand, type S3Client } from "@aws-sdk/client-s3";
 
-export const FREE_BACKUP_MAX_BYTES = 8_000_000_000;
+// Keep the private original-PDF archive's 3 GB ceiling plus this backup
+// ceiling below B2's 10 GB free storage allowance, with room for versions.
+export const FREE_BACKUP_MAX_BYTES = 6_000_000_000;
 export const FREE_SNAPSHOT_MAX_BYTES = 500_000_000;
 export class BackupQuotaError extends Error {}
 

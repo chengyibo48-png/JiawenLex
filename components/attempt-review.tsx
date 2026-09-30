@@ -7,7 +7,7 @@ import {
   normalizeTerm,
   type AttemptReview,
 } from "@/lib/review";
-import { isCorrectAnswer, localDate, startOfWeek } from "@/lib/study";
+import { isCorrectAnswer, isGradableQuestion, localDate, startOfWeek } from "@/lib/study";
 import type { Attempt, Question, WorkspaceData } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { t } from "./workspace";
@@ -62,7 +62,7 @@ export function AttemptReviewPanel({
       </p>
     );
   const wrong = review.snapshot.questions.filter(
-    (q) => !isCorrectAnswer(q, attempt.answer_body?.[q.id] ?? ""),
+    (q) => isGradableQuestion(q) && !isCorrectAnswer(q, attempt.answer_body?.[q.id] ?? ""),
   );
   const questions = review.snapshot.questions.filter(
     (q) =>
@@ -342,7 +342,9 @@ function QuestionReview({
           {position}. {q.prompt}
         </strong>
         <span className="soft-tag">
-          {isCorrectAnswer(q, attempt.answer_body?.[q.id] ?? "")
+          {!isGradableQuestion(q)
+            ? t(lang, "不自动判分", "Not automatically scored")
+            : isCorrectAnswer(q, attempt.answer_body?.[q.id] ?? "")
             ? t(lang, "正确", "Correct")
             : t(lang, "待复盘", "Review")}
           {review.flagged.includes(q.id)

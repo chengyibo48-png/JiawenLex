@@ -70,6 +70,8 @@ import { mergeProfileDraft } from "@/lib/profile-draft";
 import type { ServiceStatus } from "@/lib/service-status";
 import { clearUserDrafts } from "@/lib/offline-drafts";
 import { AiSettings } from "./ai-settings";
+import { SourceLibraryPanel } from "./source-library";
+import { QuestionCorrections } from "./question-corrections";
 
 export interface ViewActions {
   microTarget?: { topic?: string; unitKey?: string; requestId: string } | null;
@@ -726,6 +728,7 @@ export function PlanView({ data, actions }: Props) {
 
 export function LibraryView({ data, actions }: Props) {
   const lang = data.profile.language;
+  const [libraryTab, setLibraryTab] = useState<"practice" | "originals" | "review" | "corrections">("practice");
   const [search, setSearch] = useState("");
   const [grouped, setGrouped] = useState(false);
   const [collection, setCollection] = useState("");
@@ -806,16 +809,6 @@ export function LibraryView({ data, actions }: Props) {
           .map((answer) => answer.trim())
           .filter(Boolean),
       }));
-    if (questions.some((question) => !question.answers.length)) {
-      actions.notify(
-        t(
-          lang,
-          "每道题至少需要一个可接受答案。",
-          "Each question needs at least one accepted answer.",
-        ),
-      );
-      return;
-    }
     if (
       newMaterial.visibility === "shared" &&
       (!newMaterial.source_title?.trim() || !newMaterial.license_name?.trim())
@@ -1035,7 +1028,7 @@ export function LibraryView({ data, actions }: Props) {
             )}
           </p>
         </div>
-        <button
+        {libraryTab === "practice" && <button
           className="button primary"
           disabled={materialBusy}
           onClick={() => {
@@ -1053,9 +1046,17 @@ export function LibraryView({ data, actions }: Props) {
         >
           <Plus size={17} />
           {t(lang, "添加资料", "Add material")}
-        </button>
+        </button>}
       </div>
-      {creating && (
+      <div className="library-tabs" role="tablist" aria-label={t(lang, "资料库分类", "Library sections")}>
+        {(["practice", "originals", "review", "corrections"] as const).map((tab) => <button key={tab} type="button" role="tab" aria-selected={libraryTab === tab} className={`library-tab ${libraryTab === tab ? "active" : ""}`} onClick={() => { setLibraryTab(tab); setCreating(false); setSelectedId(null); }}>
+          {tab === "practice" ? t(lang, "练习题库", "Practice bank") : tab === "originals" ? t(lang, "原始资料", "Original archive") : tab === "review" ? t(lang, "识别审核", "Recognition review") : t(lang, "题目纠错", "Question corrections")}
+        </button>)}
+      </div>
+      {libraryTab === "originals" && <SourceLibraryPanel mode="originals" client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "review" && <SourceLibraryPanel mode="review" client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "corrections" && <QuestionCorrections client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "practice" && creating && (
         <section className="card editor-card">
           <div className="card-top">
             <h3>
@@ -1228,8 +1229,8 @@ export function LibraryView({ data, actions }: Props) {
                           aria-label={t(lang, "正确答案", "Accepted answers")}
                           placeholder={t(
                             lang,
-                            "每行一个可接受答案，支持逗号",
-                            "One accepted answer per line; commas are allowed",
+                            "每行一个可接受答案；尚未核实答案时留空并标记为不自动判分",
+                            "One accepted answer per line; leave blank when the answer is not verified",
                           )}
                           value={question.answers.join("\n")}
                           onChange={(event) =>
@@ -1418,7 +1419,7 @@ export function LibraryView({ data, actions }: Props) {
           </form>
         </section>
       )}
-      <section className="card">
+      {libraryTab === "practice" && <section className="card">
         <div className="library-toolbar">
           <label>
             {t(lang, "合集", "Collection")}
@@ -1575,8 +1576,8 @@ export function LibraryView({ data, actions }: Props) {
             </p>
           </div>
         )}
-      </section>
-      {selected && (
+      </section>}
+      {libraryTab === "practice" && selected && (
         <section className="card detail-card">
           <div className="card-top">
             <div>
@@ -2781,7 +2782,9 @@ export function AdminView({ data, actions }: Props) {
                     ? t(lang, "提醒邮件", "Reminder email")
                     : service.id === "backup"
                       ? t(lang, "独立加密备份", "Encrypted backup")
-                      : t(lang, "AI 密钥加密", "AI key encryption")}
+                      : service.id === "source"
+                        ? t(lang, "原始 PDF 私有存储", "Private PDF archive")
+                        : t(lang, "AI 密钥加密", "AI key encryption")}
               </strong>
               <span>
                 {service.configured

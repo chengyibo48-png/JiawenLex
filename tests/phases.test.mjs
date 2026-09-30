@@ -25,7 +25,10 @@ const pg=await PGlite.create();try{
     `);
     for (const name of (await fs.readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) {
       // No pgcrypto functionality is used: SHA256 and UUID functions are built into PostgreSQL.
-      const sql = (await fs.readFile(new URL(name, migrations), "utf8")).replace("create extension if not exists pgcrypto;", "");
+      const sql = (await fs.readFile(new URL(name, migrations), "utf8"))
+        .replace("create extension if not exists pgcrypto;", "")
+        .replace("create extension if not exists pg_cron;", "")
+        .replace("create extension if not exists pg_net;", "");
       await pg.exec(sql);
     }
 

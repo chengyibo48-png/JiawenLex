@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 import { recordTombstone } from "@/lib/backup-ledger";
 import { createHash } from "node:crypto";
+import { AbortMultipartUploadCommand } from "@aws-sdk/client-s3";
+import { removeSourceOwnerVersions, sourceStorage } from "@/lib/source-storage";
 
 async function listPaths(admin: ReturnType<typeof import("@/lib/supabase").getAdminClient>, bucket: string, prefix: string): Promise<string[]> {
   const paths: string[] = [];
@@ -32,6 +34,13 @@ export async function DELETE(request: Request) {
     if (adminLookupError) throw adminLookupError;
     const nextOwner = nextAdmin?.id;
     if (approved?.length && !nextOwner && profile.role !== "admin") throw new HttpError(409, "No active admin can retain approved group material");
+    const [{ data: sourceDocs, error: sourceDocsError }, { data: sourceSessions, error: sourceSessionsError }] = await Promise.all([
+      admin.from("source_documents").select("object_key").eq("owner_id", userId),
+      admin.from("source_upload_sessions").select("object_key,upload_id").eq("owner_id", userId).eq("status", "uploading"),
+    ]);
+    if (sourceDocsError) throw sourceDocsError;
+    if (sourceSessionsError) throw sourceSessionsError;
+    const sourceStore = sourceDocs?.length || sourceSessions?.length ? sourceStorage() : null;
     await recordTombstone({ entity: "account", entityId: userId, ownerId: userId, at: new Date().toISOString() });
     const retained = new Set<string>();
     for (const material of approved ?? []) {
@@ -68,6 +77,16 @@ export async function DELETE(request: Request) {
         if (error) throw error;
       }
     }
+    for (const session of sourceSessions ?? []) {
+      if (!sourceStore) throw new Error("Document storage configuration is missing");
+      try {
+        await sourceStore.client.send(new AbortMultipartUploadCommand({ Bucket: sourceStore.bucket, Key: session.object_key, UploadId: session.upload_id }));
+      } catch (error) {
+        if (error instanceof Error && error.name !== "NoSuchUpload" && (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode !== 404) throw error;
+      }
+    }
+    if ((sourceDocs?.length || sourceSessions?.length) && sourceStore)
+      await removeSourceOwnerVersions(sourceStore.client, sourceStore.bucket, userId);
     const { error } = await admin.auth.admin.deleteUser(userId);
     if (error) throw error;
     return NextResponse.json({ deleted: true });
