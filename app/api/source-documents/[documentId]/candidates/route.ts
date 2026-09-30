@@ -34,21 +34,26 @@ export async function POST(request: Request, { params }: Context) {
     if (documentError) throw documentError;
     if (!document || document.status !== "ready") throw new HttpError(404, "Original PDF is unavailable");
     if (document.page_count && document.page_count !== input.totalPages) throw new HttpError(409, "Page count does not match the uploaded document");
-    const { data: prior, error: priorError } = await admin.from("source_parse_batches").select("id").eq("owner_id", userId).eq("idempotency_key", input.idempotencyKey).maybeSingle();
+    const { data: prior, error: priorError } = await admin.from("source_parse_batches")
+      .select("id,document_id,parser,parser_version,total_pages,parsed_pages")
+      .eq("owner_id", userId).eq("idempotency_key", input.idempotencyKey).maybeSingle();
     if (priorError) throw priorError;
-    if (prior) {
-      const { count, error } = await admin.from("source_review_candidates").select("id", { count: "exact", head: true }).eq("batch_id", prior.id);
-      if (error) throw error;
-      return NextResponse.json({ batchId: prior.id, inserted: count ?? 0, duplicate: true });
+    if (prior && (prior.document_id !== documentId || prior.parser !== input.parser ||
+      prior.parser_version !== input.parserVersion || prior.total_pages !== input.totalPages ||
+      prior.parsed_pages !== input.parsedPages))
+      throw new HttpError(409, "Import key belongs to a different document or parse");
+    let batchId = prior?.id;
+    if (!batchId) {
+      const { data: batch, error: batchError } = await admin.from("source_parse_batches").insert({
+        owner_id: userId, document_id: documentId, parser: input.parser, parser_version: input.parserVersion,
+        total_pages: input.totalPages, parsed_pages: input.parsedPages,
+        status: input.parsedPages === input.totalPages ? "review" : "parsing", idempotency_key: input.idempotencyKey,
+      }).select("id").single();
+      if (batchError) throw batchError;
+      batchId = batch.id;
     }
-    const { data: batch, error: batchError } = await admin.from("source_parse_batches").insert({
-      owner_id: userId, document_id: documentId, parser: input.parser, parser_version: input.parserVersion,
-      total_pages: input.totalPages, parsed_pages: input.parsedPages,
-      status: input.parsedPages === input.totalPages ? "review" : "parsing", idempotency_key: input.idempotencyKey,
-    }).select("id").single();
-    if (batchError) throw batchError;
     const rows = input.items.map((item) => ({
-      owner_id: userId, document_id: documentId, batch_id: batch.id,
+      owner_id: userId, document_id: documentId, batch_id: batchId,
       fingerprint: fingerprint(item), physical_page: item.physicalPage, printed_page: item.printedPage,
       section_title: item.sectionTitle, content_kind: item.contentKind, payload: item.payload,
     }));
@@ -58,6 +63,6 @@ export async function POST(request: Request, { params }: Context) {
       page_count: input.totalPages, parse_status: input.parsedPages === input.totalPages ? "review" : "parsing", parsed_pages: Math.max(0, Math.min(input.parsedPages, input.totalPages)),
     }).eq("id", documentId).eq("owner_id", userId);
     if (documentUpdateError) throw documentUpdateError;
-    return NextResponse.json({ batchId: batch.id, inserted: data?.length ?? 0, duplicate: false }, { status: 201 });
+    return NextResponse.json({ batchId, inserted: data?.length ?? 0, duplicate: !!prior }, { status: prior ? 200 : 201 });
   } catch (error) { return apiError(error); }
 }

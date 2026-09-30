@@ -2,3 +2,29 @@
 @media(max-width:760px){.source-upload-row,.source-document-row{align-items:flex-start;flex-wrap:wrap}.source-upload-row progress{width:calc(100% - 54px);order:3}.source-document-row>.button{margin-inline-start:auto}.source-review-columns{grid-template-columns:1fr}.source-page-preview,.source-page-preview iframe{min-height:360px;height:52vh}.source-payload-editor textarea{min-height:300px}.source-metadata-grid label,.source-url-field{grid-column:1/-1}}
 .question-report-form,.question-correction-form{display:grid;gap:12px}.question-report-form h3,.question-report-form p{margin:0}.question-report-form label,.question-correction-form label{display:grid;gap:7px;font-weight:600}.question-report-form textarea,.question-correction-form textarea{width:100%;resize:vertical;line-height:1.55}.question-report-check{display:flex!important;grid-template-columns:auto 1fr;align-items:center;gap:9px!important;font-weight:500!important}.question-report-check input{width:18px;height:18px;margin:0;accent-color:var(--primary)}.question-correction-layout{display:grid;grid-template-columns:minmax(280px,.85fr) minmax(0,1.15fr);gap:16px;align-items:start}.question-correction-detail{display:grid;gap:14px}.question-correction-detail .card-top h3{margin:4px 0}.question-correction-actions{display:flex;align-items:center;gap:8px}.question-correction-form{margin:8px 0 14px}.question-correction-form textarea{font-weight:400}.question-correction-detail .notice p{margin:6px 0 0;white-space:pre-wrap}.question-correction-detail .notice.warning{margin:0}
 @media(max-width:800px){.question-correction-layout{grid-template-columns:1fr}}
+
+.source-upload-copy .source-license-warning,
+.source-upload-copy .source-license-note {
+  font-size: .82rem;
+  font-weight: 650;
+}
+.source-upload-copy .source-license-warning { color: var(--warning); }
+.source-upload-copy .source-license-note { color: var(--primary-strong); }
+.source-license-edit {
+  justify-self: start;
+  min-height: 40px;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary-strong);
+  font: inherit;
+  font-size: .83rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.source-license-edit:hover { text-decoration: underline; }
+.source-license-edit:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.source-license-editor { display: grid; gap: 9px; max-width: 520px; }
+.source-license-editor label { display: grid; gap: 6px; font-size: .83rem; font-weight: 650; }
+.source-license-editor .button-row { margin: 0; }

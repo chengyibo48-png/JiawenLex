@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -46,6 +46,11 @@ async function mineruJson(binary, args) {
 }
 
 async function postBatch(api, documentId, token, totalPages, parsedPages, items) {
+  const digest = createHash("sha1").update(JSON.stringify([documentId, "MinerU", "local-standard", totalPages, parsedPages, items])).digest();
+  digest[6] = (digest[6] & 15) | 0x50;
+  digest[8] = (digest[8] & 63) | 0x80;
+  const hex = digest.subarray(0, 16).toString("hex");
+  const idempotencyKey = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   const response = await fetch(`${api.replace(/\/$/, "")}/api/source-documents/${encodeURIComponent(documentId)}/local-import`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -54,7 +59,7 @@ async function postBatch(api, documentId, token, totalPages, parsedPages, items)
       parserVersion: "local-standard",
       totalPages,
       parsedPages,
-      idempotencyKey: randomUUID(),
+      idempotencyKey,
       items,
     }),
   });
