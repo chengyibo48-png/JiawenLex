@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, Headphones, PenLine, Mic, GraduationCap, Layers, Star, Library } from "lucide-react";
+import dynamic from "next/dynamic";
+import { ArrowLeft, ArrowRight, BookOpen, Headphones, PenLine, Mic, GraduationCap, Layers, Star, Library, Sparkles } from "lucide-react";
 import type { WorkspaceData, VocabularyWord } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { apiFetch } from "@/lib/supabase";
 import { WordMemory } from "./word-memory";
 import { t } from "./workspace";
+const WordAchievements = dynamic(() => import("./word-achievements").then(module => module.WordAchievements), { loading: () => <section className="card" role="status">正在打开成就闪卡… / Loading achievements…</section> });
 const categories = [
  { id:"reading", zh:"阅读词汇", en:"Reading", icon:BookOpen, desc:"学科、场景与同义替换" },
  { id:"listening", zh:"听力词汇", en:"Listening", icon:Headphones, desc:"场景词与答案词" },
@@ -24,6 +26,8 @@ type Count = {collection:string;total:number;due:number};
 type Page = {words:VocabularyWord[];hasMore:boolean;cursor:string|null};
 export function VocabularyCollections({data,actions,manager}:{data:WorkspaceData;actions:ViewActions;manager:(data:WorkspaceData,actions:ViewActions)=>React.ReactNode}) {
  const lang=data.profile.language;
+ const [achievementsOpen,setAchievementsOpen]=useState(false);
+ const [achievementRevision,setAchievementRevision]=useState(0);
  const [counts,setCounts]=useState<Count[]>([]),[selected,setSelected]=useState<string|null>(null),[words,setWords]=useState<VocabularyWord[]>([]);
  const [more,setMore]=useState(false),[cursor,setCursor]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
  const generation=useRef(0),lock=useRef(false),active=useRef<string|null>(null),edits=useRef(new Map<string,VocabularyWord>());
@@ -49,7 +53,7 @@ export function VocabularyCollections({data,actions,manager}:{data:WorkspaceData
  function choose(id:string){active.current=id;setSelected(id);setWords([]);setCursor(null);setMore(false);void load(id);}
  function back(){generation.current++;lock.current=false;active.current=null;setBusy(false);setError("");setSelected(null);void loadCounts().catch(e=>setError(e.message));}
  const localActions:ViewActions={...actions,
-  acceptWord:word=>{edits.current.set(word.id,word);setWords(previous=>previous.map(w=>w.id===word.id?word:w).filter(w=>active.current!=="favorites"||w.tags.includes("收藏")));actions.acceptWord?.(word);},
+  acceptWord:word=>{setAchievementRevision(value=>value+1);edits.current.set(word.id,word);setWords(previous=>previous.map(w=>w.id===word.id?word:w).filter(w=>active.current!=="favorites"||w.tags.includes("收藏")));actions.acceptWord?.(word);},
   refresh:async()=>{await actions.refresh();await loadCounts();if(active.current)await load(active.current);},
   upsert:async(...args)=>{await actions.upsert(...args);if(!actions.client&&args[1]==="words"){const word=args[2] as unknown as VocabularyWord;setWords(previous=>[...previous.filter(w=>w.id!==word.id),word].filter(w=>matches(w,active.current??"all")));}else if(active.current)await load(active.current);},
   remove:async(...args)=>{await actions.remove(...args);if(!actions.client&&args[1]==="words")setWords(previous=>previous.filter(w=>w.id!==args[2]));else if(active.current)await load(active.current);},
@@ -57,6 +61,8 @@ export function VocabularyCollections({data,actions,manager}:{data:WorkspaceData
  const localData={...data,words,wordsLoaded:true};
  const category=categories.find(c=>c.id===selected);
  return <div className="page-stack vocabulary-collections">
+ <div className="collection-topbar"><button type="button" className="button secondary" aria-expanded={achievementsOpen} aria-controls={achievementsOpen?"vocabulary-achievements-panel":undefined} onClick={()=>setAchievementsOpen(open=>!open)}><Sparkles size={20}/>{t(lang,achievementsOpen?"收起成就闪卡":"成就闪卡",achievementsOpen?"Hide achievements":"Achievement cards")}</button><span className="muted">{t(lang,"查看解锁进度与闪卡收藏，无需先打开词卡分类。","View milestones and collectible cards without opening a collection.")}</span></div>
+ {achievementsOpen&&<div id="vocabulary-achievements-panel"><WordAchievements client={actions.client} language={lang} refreshKey={achievementRevision}/></div>}
  {!selected?<><div className="section-intro"><span className="eyebrow">VOCABULARY COLLECTIONS</span><h2>{t(lang,"选择词卡分类","Choose a collection")}</h2><p className="muted">{t(lang,"按科目开始，每次只加载 250 张。跨科目词卡会出现在多个分类，复习记录共用。","Start by subject. Load 250 cards at a time. Cards in multiple collections share the same review history.")}</p></div>
  <div className="word-collection-grid">{categories.map(c=>{const count=counts.find(n=>n.collection===c.id);const Icon=c.icon;return <button key={c.id} className={`word-collection-tile collection-${c.id}`} onClick={()=>choose(c.id)} disabled={busy}><span className="collection-icon"><Icon size={26}/></span><strong>{t(lang,c.zh,c.en)}</strong><span className="muted">{t(lang,c.desc,c.en)}</span><span className="collection-count">{count?Number(count.total).toLocaleString():"—"} {t(lang,"张词卡","cards")}<ArrowRight size={18}/></span>{count&&<small>{Number(count.due).toLocaleString()} {t(lang,"张待复习","due")}</small>}</button>;})}</div>
  {error&&<div className="card" role="alert"><p>{error}</p><button className="button secondary" onClick={()=>void loadCounts().then(()=>setError("")).catch(e=>setError(e.message))}>{t(lang,"重试","Retry")}</button></div>}</>:<>

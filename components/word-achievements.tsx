@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { LockKeyhole, Sparkles, X } from "lucide-react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { apiFetch } from "@/lib/supabase";
@@ -20,6 +20,7 @@ export function WordAchievements({ client, language, refreshKey }: {
   client: SupabaseClient | null; language: string; refreshKey: number;
 }) {
   const en = language === "en";
+  const titleId = useId();
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -47,8 +48,8 @@ export function WordAchievements({ client, language, refreshKey }: {
   const unlocked = progress?.unlocked ?? 0;
   // More artwork can be attached to milestones without changing earned progress.
   const visible = Math.min(6, Math.max(4, unlocked + 1));
-  return <section className="card word-achievements" aria-labelledby="word-achievement-title">
-    <div className="card-top"><div><h3 id="word-achievement-title"><Sparkles size={20}/>{en ? "Word collection" : "词汇成就 · 闪卡收藏"}</h3><p className="muted">{en ? "One milestone for every 500 distinct words you confirm as known." : "每累计确认认识 500 个不同单词，解锁一张闪卡。"}</p></div>
+  return <section className="card word-achievements" aria-labelledby={titleId}>
+    <div className="card-top"><div><h3 id={titleId}><Sparkles size={20}/>{en ? "Word collection" : "词汇成就 · 闪卡收藏"}</h3><p className="muted">{en ? "One milestone for every 500 distinct words you confirm as known." : "每累计确认认识 500 个不同单词，解锁一张闪卡。"}</p></div>
       <span className="achievement-total">{progress ? `${progress.learned} ${en ? "words" : "词"}` : "—"}</span></div>
     {!client && <p className="notice info">{en ? "Sign in to track your collection. Demo browsing earns no achievements." : "登录后记录成就；演示浏览不解锁闪卡。"}</p>}
     {error && <p className="notice info" role="alert">{error} <button className="text-link" onClick={() => setRetry(n => n + 1)}>{en ? "Retry" : "重试"}</button></p>}
