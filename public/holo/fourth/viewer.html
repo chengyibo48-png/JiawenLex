@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>珊瑚伙伴 · 镭射闪卡</title>
+<link rel="stylesheet" href="./preview/card.css">
+<style>html,body{margin:0;min-height:100%;background:#ecf5f4;color:#164640;font:15px system-ui,sans-serif}body{display:grid;place-items:center;padding:24px;box-sizing:border-box}main{width:min(78vh,100%,540px)}#host{min-height:230px}.lhc{border-radius:18px}.lhc:focus-visible{outline:3px solid #168578;outline-offset:5px}.tools{display:flex;justify-content:center;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}button{font:inherit;background:white;color:#164640;border:1px solid #b5cec9;border-radius:9px;min-height:44px;padding:8px 14px;cursor:pointer}button:disabled{cursor:default;opacity:.6}#status{text-align:center}button:focus-visible{outline:3px solid #168578;outline-offset:2px}@media(prefers-color-scheme:dark){html,body{background:#17342f;color:#e6f5f2}button{background:#26483f;color:#e6f5f2}}@media(max-width:420px){body{padding:16px}main{width:100%}}</style></head>
+<body><main><div id="host"></div><p id="status" role="status">正在加载闪卡…</p><div class="tools"><button id="tilt" disabled>旋转已开启</button><button id="reset" disabled>回到正面</button></div></main>
+<script type="module">
+import { mountCard } from './preview/card.js';
+const en=new URLSearchParams(location.search).get('lang')==='en';
+document.documentElement.lang=en?'en':'zh-CN';
+document.title=en?'Coral companion · holographic card':'珊瑚伙伴 · 镭射闪卡';
+const host=document.querySelector('#host'),status=document.querySelector('#status'),tilt=document.querySelector('#tilt'),reset=document.querySelector('#reset');
+let card,disposed=false,tilted=true;
+status.textContent=en?'Loading card…':'正在加载闪卡…';
+reset.textContent=en?'Return to front':'回到正面';
+const label=()=>tilt.textContent=en?(tilted?'Rotation on':'Internal depth only'):(tilted?'旋转已开启':'仅查看内部浮层');label();
+try{
+ const response=await fetch('./presentation.json?v='+encodeURIComponent(new URLSearchParams(location.search).get('v')??''),{cache:'no-cache'});if(!response.ok)throw new Error('asset');
+ const config=await response.json();
+ card=await mountCard(host,config,{baseURL:new URL('./',location.href).href});
+ if(disposed){card.dispose();}else{
+  host.querySelector('.lhc').setAttribute('role','group');
+  host.querySelector('.lhc').setAttribute('aria-label',en?'Coral companion card. Move pointer, drag or use arrow keys.':'珊瑚伙伴闪卡。移动鼠标、拖动或使用方向键旋转。');
+  status.textContent=en?'Move or drag to explore the layers.':'移动鼠标或拖动查看镭射与浮层。';tilt.disabled=false;reset.disabled=false;
+ }
+}catch{status.setAttribute('role','alert');status.textContent=en?'Card cannot load. Check your connection and WebGL2 support, then reopen.':'闪卡未能加载，请检查网络及浏览器 WebGL2 支持，再重新打开。';}
+tilt.onclick=()=>{tilted=!tilted;card?.setTilt(tilted);label();};
+reset.onclick=()=>{const element=host.querySelector('.lhc');element?.dispatchEvent(new Event('pointerleave'));element?.blur();};
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();parent.postMessage({type:'holo-close'},location.origin);}});
+window.addEventListener('pagehide',()=>{disposed=true;card?.dispose();},{once:true});
+</script></body></html>

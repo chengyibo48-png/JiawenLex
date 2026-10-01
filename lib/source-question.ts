@@ -27,6 +27,7 @@ const question = z.object({
   reference_answers: z.array(z.string().trim().min(1).max(4000)).max(10).optional(),
   explanation: z.string().max(4000).default(""),
   word_limit: z.number().int().positive().max(1000).optional(),
+  answer_limit_text: z.string().trim().max(1000).optional(),
   source_refs: z.array(sourceRef).min(1).max(20),
   source_document_id: uuid,
   source_physical_page: z.number().int().positive(),

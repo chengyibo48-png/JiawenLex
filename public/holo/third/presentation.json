@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "size": [
+    1199,
+    677
+  ],
+  "original": "original.jpg",
+  "background": "background.png",
+  "layers": [
+    {
+      "id": "subject",
+      "role": "main",
+      "src": "subject.png",
+      "receiver": "background"
+    }
+  ],
+  "material": "rainbow",
+  "depth": 1,
+  "foil": 0.82,
+  "frame": false,
+  "motion": true,
+  "sourceHash": "461bdc183ef7d760d0a76ff3d9938b75bff72cc51b4f84db73b8a2ba5e20d689",
+  "parameters": {
+    "depthStrength": 1.12,
+    "parallaxStrength": 1.1,
+    "foregroundAccentStrength": 1,
+    "rainbowStrength": 1.65,
+    "glareStrength": 1.7,
+    "textureStrength": 1.6,
+    "shadowStrength": 0.85,
+    "shadowSoftness": 1,
+    "tiltStrength": 1.12,
+    "frameStrength": 0.0
+  },
+  "preset": "shimmer"
+}

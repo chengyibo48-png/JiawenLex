@@ -51,6 +51,8 @@ export async function mountCard(host,config,{baseURL=document.baseURI,onError=()
   if(typeof path!=='string'||!path||path.includes('\\')||path.split('/').includes('..'))throw new Error('Unsafe asset path');
   const resolved=new URL(path,base);
   if(resolved.origin!==base.origin||!resolved.pathname.startsWith(new URL('.',base).pathname))throw new Error('Asset must stay inside output');
+  const revision=new URLSearchParams(location.search).get('v');
+  if(revision)resolved.searchParams.set('v',revision);
   return resolved.href;
  };
  let disposed=false,raf=0,failed=false;

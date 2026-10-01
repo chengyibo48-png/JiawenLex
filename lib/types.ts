@@ -71,6 +71,7 @@ export interface Question {
   answers: string[];
   explanation: string;
   word_limit?: number;
+  answer_limit_text?: string;
 }
 
 export interface Material {

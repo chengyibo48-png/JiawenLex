@@ -1,3 +1,4 @@
+import { hasQuestionAnswer } from "./question-progress";
 import type { Material, WorkspaceData } from "./types";
 
 export interface PracticeSessionState {
@@ -50,8 +51,9 @@ export function initialSessionState(material: Material): PracticeSessionState {
     currentQuestionId: material.questions[0]?.id ?? null, mobilePane: "questions",
     mode: "practice", durationMinutes: 40, startedAt: null, deadline: null, elapsedSeconds: 0 };
 }
-export function answeredCount(session: PracticeSession): number {
-  return session.state.questionIds.filter((id) => session.state.answers[id]?.trim()).length;
+export function answeredCount(session: PracticeSession, material?: Material): number {
+  const questions = new Map(material?.questions.map(q => [q.id, q]));
+  return session.state.questionIds.filter((id) => hasQuestionAnswer(session.state.answers[id], questions.get(id))).length;
 }
 export function estimateMinutes(material: Material): number {
   if (material.skill === "writing") return 40;

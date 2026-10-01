@@ -8,7 +8,7 @@ import {
   Mic,
   Search,
 } from "lucide-react";
-import { estimateMinutes, practiceMaterials } from "@/lib/practice-sessions";
+import { answeredCount, estimateMinutes, practiceMaterials } from "@/lib/practice-sessions";
 import { skillLabels, skills } from "@/lib/study";
 import type { Material, Skill, WorkspaceData } from "@/lib/types";
 import type { ViewActions } from "./views";
@@ -299,9 +299,7 @@ export function PracticeCatalog({
                     <small>
                       {t(lang, "已答", "Answered")}{" "}
                       {
-                        progress.state.questionIds.filter((id) =>
-                          progress.state.answers[id]?.trim(),
-                        ).length
+                        answeredCount(progress, material)
                       }
                       /{progress.state.questionIds.length} ·{" "}
                       {t(lang, "继续作答", "Resume")}
@@ -371,9 +369,7 @@ export function PracticeCatalog({
                     <small>
                       {t(lang, "已答", "Answered")}{" "}
                       {
-                        progress.state.questionIds.filter((id) =>
-                          progress.state.answers[id]?.trim(),
-                        ).length
+                        answeredCount(progress, material)
                       }
                       /{progress.state.questionIds.length} ·{" "}
                       {t(lang, "继续作答", "Resume")}

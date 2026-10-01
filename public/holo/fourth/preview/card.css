@@ -1,0 +1,11 @@
+.lhc{position:relative;width:min(78vw,440px);max-width:100%;perspective:1100px;touch-action:none;outline-offset:8px;isolation:isolate}
+.lhc-plane{position:absolute;inset:0;transform-style:preserve-3d}
+.lhc-layer-clip,.lhc-surface,.lhc-cutout,.lhc-shadow{position:absolute;inset:0;display:block;width:100%;height:100%;pointer-events:none;user-select:none;backface-visibility:hidden}
+.lhc-layer-clip{transform-style:preserve-3d}
+.lhc-cutout{object-fit:fill}
+.lhc-surface{border-radius:1.6%;box-shadow:0 12px 24px #00000012}
+.lhc-cutout{will-change:transform}
+.lhc-shadow{will-change:transform}
+.lhc-frame .lhc-surface{outline:1px solid rgb(173 155 117 / var(--frame-strength,1));outline-offset:1px}
+.lhc-error{padding:24px;background:#fff3ee;color:#8b2719;border:1px solid #e7c8bd;white-space:pre-wrap;font:14px/1.6 system-ui}
+.lhc-status{font:14px/1.6 system-ui;color:#756c60}

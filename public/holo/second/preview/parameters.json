@@ -1,0 +1,20 @@
+{
+  "controls": {
+    "depthStrength": {"label":"主体浮起", "max":1.25},
+    "parallaxStrength": {"label":"视差强度", "max":1.25},
+    "foregroundAccentStrength": {"label":"前景装饰浮起", "max":1.15},
+    "rainbowStrength": {"label":"闪膜强度", "max":2},
+    "glareStrength": {"label":"移动高光", "max":2},
+    "textureStrength": {"label":"材质颗粒", "max":2},
+    "shadowStrength": {"label":"主体阴影", "max":1.4},
+    "shadowSoftness": {"label":"阴影柔和度", "max":1.75},
+    "tiltStrength": {"label":"整卡倾斜", "max":1.25},
+    "frameStrength": {"label":"边框存在感", "max":1}
+  },
+  "presets": {
+    "default": {},
+    "restrained": {"depthStrength":0.8,"parallaxStrength":0.8,"rainbowStrength":0.65,"glareStrength":0.75,"textureStrength":0.7,"shadowStrength":0.8,"tiltStrength":0.8},
+    "shimmer": {"rainbowStrength":1.5,"glareStrength":1.5,"textureStrength":1.4},
+    "depth": {"depthStrength":1.15,"parallaxStrength":1.15,"foregroundAccentStrength":1.05}
+  }
+}

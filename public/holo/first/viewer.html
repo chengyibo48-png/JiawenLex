@@ -14,7 +14,7 @@ status.textContent=en?'Loading card…':'正在加载闪卡…';
 reset.textContent=en?'Return to front':'回到正面';
 const label=()=>tilt.textContent=en?(tilted?'Rotation on':'Internal depth only'):(tilted?'旋转已开启':'仅查看内部浮层');label();
 try{
- const response=await fetch('./presentation.json');if(!response.ok)throw new Error('asset');
+ const response=await fetch('./presentation.json?v='+encodeURIComponent(new URLSearchParams(location.search).get('v')??''),{cache:'no-cache'});if(!response.ok)throw new Error('asset');
  const config=await response.json();
  card=await mountCard(host,config,{baseURL:new URL('./',location.href).href});
  if(disposed){card.dispose();}else{
