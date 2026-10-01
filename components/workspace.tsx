@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import dynamic from "next/dynamic";
-import { createSessionRequestQueue, mergeConfirmedRows } from "@/lib/session-requests";
+import { mergeConfirmedRows } from "@/lib/session-requests";
 import { APP_VERSION } from "@/lib/release";
 import { brandAssets } from "@/lib/brand";
 
@@ -30,7 +30,6 @@ import {
   deleteRow,
   getBrowserClient,
   loadWorkspace,
-  loadVocabulary,
   saveRow,
 } from "@/lib/supabase";
 import type {
@@ -108,8 +107,6 @@ export function Workspace() {
   const refreshRun = useRef<Promise<void> | null>(null);
   const refreshPending = useRef(false);
   const authGeneration = useRef(0);
-  const wordLoads = useMemo(() => createSessionRequestQueue(), []);
-  const [wordLoadError, setWordLoadError] = useState("");
   const wordEdits = useRef(new Map<string, VocabularyWord>());
   const taskEdits = useRef(new Map<string, StudyTask>());
   const demoQuotaWarned = useRef(false);
@@ -182,7 +179,6 @@ export function Workspace() {
         window.setTimeout(() => void refresh(), 0);
       if (event === "SIGNED_OUT") {
         authGeneration.current++;
-        wordLoads.reset();
         taskEdits.current.clear();
         wordEdits.current.clear();
         setUser(null);
@@ -191,39 +187,14 @@ export function Workspace() {
       }
     });
     return () => listener.subscription.unsubscribe();
-  }, [client, refresh, wordLoads]);
-
-  const refreshWords = useCallback((): Promise<void> => {
-    if (!client || !user?.id) return Promise.resolve();
-    const ownerId = user.id, generation = authGeneration.current;
-    return wordLoads.run(ownerId, generation, async () => {
-      const edits = new Map<string, VocabularyWord>();
-      wordEdits.current = edits;
-      setWordLoadError("");
-      try {
-        const words = await loadVocabulary(client);
-        if (generation !== authGeneration.current) return;
-        setData(previous => previous?.profile.id === ownerId ? {
-          ...previous, words: words.map(word => edits.get(word.id) ?? word), wordsLoaded: true,
-        } : previous);
-      } catch (error) {
-        if (generation === authGeneration.current) setWordLoadError(error instanceof Error ? error.message : "词表加载失败");
-      }
-    });
-  }, [client, user?.id, wordLoads]);
-
-  useEffect(() => { setWordLoadError(""); }, [user?.id]);
-
-  useEffect(() => {
-    if (view === "vocabulary" && data && data.wordsLoaded === false && !wordLoadError) void refreshWords();
-  }, [view, data?.profile.id, data?.wordsLoaded, wordLoadError, refreshWords]);
+  }, [client, refresh]);
 
   useEffect(() => {
     if (demoMode) return;
     const reload = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const resume = () => { reload(); if (view === "vocabulary" && document.visibilityState === "visible") void refreshWords(); };
+    const resume = () => { reload(); };
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
     const interval = window.setInterval(reload, 30000);
@@ -232,7 +203,7 @@ export function Workspace() {
       document.removeEventListener("visibilitychange", resume);
       window.clearInterval(interval);
     };
-  }, [refresh, refreshWords, view]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!client || !user?.id || demoMode) return;
@@ -505,7 +476,7 @@ export function Workspace() {
     updateProfile,
     replacePlan,
     notify,
-    refresh: async () => { await refresh(); if (view === "vocabulary") await refreshWords(); },
+    refresh: async () => { await refresh(); },
     acceptTask: (task) => {
       taskEdits.current.set(task.id, task);
       setData(previous => previous?.profile.id === task.owner_id ? {
@@ -817,12 +788,7 @@ export function Workspace() {
               onInitialConsumed={() => setPracticeMaterialId(null)}
             />
           )}
-          {view === "vocabulary" && data.wordsLoaded === false && <section className="card" role="status">
-            {wordLoadError ? <><p>{wordLoadError}</p><button className="button secondary" onClick={() => void refreshWords()}>重新加载词表 / Retry</button></> : <p>正在加载你的词卡… / Loading your cards…</p>}
-          </section>}
-          {view === "vocabulary" && data.wordsLoaded !== false && (
-            <VocabularyView data={data} actions={actions} />
-          )}
+          {view === "vocabulary" && <VocabularyView key={data.profile.id} data={data} actions={actions} />}
           {view === "plan" && <PlanView data={data} actions={actions} />}
           {view === "methods" && <MethodsView data={data} actions={actions} />}
           {view === "library" && <LibraryView data={data} actions={actions} />}

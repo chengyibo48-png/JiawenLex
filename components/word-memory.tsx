@@ -26,6 +26,9 @@ export function WordMemory({ data, actions, manager }: { data: WorkspaceData; ac
   const [rehearsal, setRehearsal] = useState<string[]>([]), [done, setDone] = useState(0), [seenToday,setSeenToday] = useState<string[]>([]);
   const [savedWords,setSavedWords] = useState<Record<string,VocabularyWord>>({});
   const [favoriteBusy,setFavoriteBusy] = useState(false);
+  // Fresh authoritative rows already include accepted local edits. Do not keep
+  // an older favorite/content snapshot over a later collection refresh.
+  useEffect(() => { setSavedWords({}); }, [data.words]);
   const [cooldown,setCooldown] = useState<Record<string,number>>({}),[tick,setTick]=useState(Date.now());
   const effectiveWords = useMemo(() => data.words.map(w => savedWords[w.id] &&
     (savedWords[w.id].content_revision ?? 1) === (w.content_revision ?? 1) &&

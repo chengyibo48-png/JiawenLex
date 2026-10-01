@@ -1,5 +1,5 @@
 "use client";
-import { WordMemory } from "./word-memory";
+import { VocabularyCollections } from "./vocabulary-collections";
 import { APP_VERSION } from "@/lib/release";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -138,7 +138,7 @@ function SkillTag({
 export { TodayView } from "./today-view";
 
 export function VocabularyView(props: Props) {
-  return <WordMemory {...props} manager={<VocabularyManagerView {...props} />} />;
+  return <VocabularyCollections {...props} manager={(data,actions) => <VocabularyManagerView data={data} actions={actions}/>} />;
 }
 
 function VocabularyManagerView({ data, actions }: Props) {
