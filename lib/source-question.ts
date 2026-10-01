@@ -32,6 +32,7 @@ const question = z.object({
   source_physical_page: z.number().int().positive(),
   source_printed_page: z.string().max(100).default(""),
   verified: z.boolean(),
+  verification_level: z.enum(["source_verified", "administrator_approved"]).optional(),
   requires_figure: z.boolean().default(false),
 });
 export const sourceQuestionPayload = z.object({
@@ -54,8 +55,10 @@ export const sourceQuestionPayload = z.object({
   extraction_issues: z.array(z.string()).max(0, "题目仍有识别疑点，请先完成核验").default([]),
 });
 
-export function validateSourceQuestion(input: unknown, documentId: string) {
-  const value = sourceQuestionPayload.parse(input);
+export function validateSourceQuestion(input: unknown, documentId: string, administratorApproval = false) {
+  const value = administratorApproval
+    ? sourceQuestionPayload.extend({ reviewed_against_pdf: z.boolean(), answer_alignment_checked: z.boolean() }).parse(input)
+    : sourceQuestionPayload.parse(input);
   if (value.track !== "academic") throw new Error("GT 专项练习尚未开放发布");
   if (value.audioFilePath && value.figureFilePath) throw new Error("当前题组仅支持一个辅助附件；同时需要图表和音频的题组暂留待处理");
   if ((value.questions.some((q) => q.requires_figure || q.source_refs.some((ref) => ref.role === "figure")) || value.source_refs.some((ref) => ref.role === "figure")) && !value.figureFilePath) throw new Error("图表题缺少独立图表附件，不能发布");
@@ -67,7 +70,8 @@ export function validateSourceQuestion(input: unknown, documentId: string) {
   for (const item of value.questions) {
     if (ids.has(item.id)) throw new Error(`题号重复：${item.id}`);
     ids.add(item.id);
-    if (!item.verified) throw new Error(`题目 ${item.id} 尚未对照原页核验`);
+    if (!item.verified && !administratorApproval) throw new Error(`题目 ${item.id} 尚未对照原页核验`);
+    if (administratorApproval) item.verification_level = "administrator_approved";
     if (item.source_document_id !== documentId && !item.source_refs.some((ref) => ref.document_id === documentId)) throw new Error(`题目 ${item.id} 缺少主文件来源`);
     if (!item.source_refs.some((ref) => ref.role === "question" && ref.document_id === item.source_document_id && ref.physical_page === item.source_physical_page)) throw new Error(`题目 ${item.id} 的原题页码不一致`);
     if (["single_choice", "multi_choice"].includes(item.answer_mode) && (!item.choices?.length || new Set(item.choices).size !== item.choices.length)) throw new Error(`题目 ${item.id} 选项不完整或重复`);

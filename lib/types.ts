@@ -64,6 +64,7 @@ export interface Question {
   source_physical_page?: number;
   source_printed_page?: string;
   verified?: boolean;
+  verification_level?: "source_verified" | "administrator_approved";
   id: string;
   type: string;
   prompt: string;

@@ -7,6 +7,7 @@ const Update = z.object({
   candidateId: z.string().uuid(),
   action: z.enum(["save", "reject", "publish_question", "publish_vocabulary", "publish_guide"]),
   shared: z.boolean().default(false),
+  administratorApproval: z.boolean().default(false),
   payload: z.record(z.string(), z.unknown()).optional(),
   expectedRevision: z.number().int().positive().optional(),
   contentKind: z.enum(["page_text", "question", "vocabulary", "reference_answer", "figure", "note"]).optional(),
@@ -122,13 +123,19 @@ export async function PATCH(request: Request) {
     const { data: document, error: sourceError } = await admin.from("source_documents").select("title,license_name,skill,page_count,rights_attested_at,rights_attestation").eq("id", candidate.document_id).eq("owner_id", userId).maybeSingle();
     if (sourceError) throw sourceError;
     if (!document) throw new HttpError(404, "Source document unavailable");
+    if (input.administratorApproval && (profile.role !== "admin" || !input.shared || !document.rights_attested_at)) throw new HttpError(403, "管理员批准发布需要管理员、组内分享及上传者授权声明");
+    const administratorApproval = input.administratorApproval && payload.reviewed_against_pdf !== true;
+    if (administratorApproval) {
+      payload.administrator_approval = { actor: userId, approved_at: new Date().toISOString(), source_verified: false };
+      payload.tags = [...new Set([...(Array.isArray(payload.tags) ? payload.tags.filter(tag => typeof tag === "string") : []), "administrator-approved-unverified"])];
+    }
     const id = revising ? candidate.published_material_id ?? candidate.id : candidate.id;
     if (input.shared && (profile.role !== "admin" || !document.rights_attested_at)) throw new HttpError(403, "组内发布需要管理员及上传者授权声明");
     if (input.action === "publish_guide") {
-      if (contentKind !== "note" || payload.reviewed_against_pdf !== true) throw new HttpError(400, "方法笔记尚未对照原页核验");
+      if (contentKind !== "note" || (payload.reviewed_against_pdf !== true && !administratorApproval)) throw new HttpError(400, "方法笔记尚未对照原页核验");
       if (Array.isArray(payload.extraction_issues) && payload.extraction_issues.length) throw new HttpError(400, "方法笔记仍有识别疑点");
       const guide = z.object({ title: z.string().trim().min(1).max(500), category: z.enum(["plan","writing_method","answering_strategy","patterns","grammar"]), body: z.string().trim().min(20).max(50000), skill_tags: z.array(z.enum(["reading","listening","writing","speaking"])).max(4) }).parse(payload);
-      const result = await authenticatedDb(request).from("study_guides").upsert({ id, owner_id:userId, ...guide, source_document_id:candidate.document_id, visibility:input.shared?"shared":"private", approval:"approved", license_name:document.license_name||document.rights_attestation||"" });
+      const result = await authenticatedDb(request).from("study_guides").upsert({ id, owner_id:userId, ...guide, body: administratorApproval ? `【管理员批准发布 · 尚未逐页核验】\n\n${guide.body}` : guide.body, source_document_id:candidate.document_id, visibility:input.shared?"shared":"private", approval:"approved", license_name:document.license_name||document.rights_attestation||"" });
       if(result.error) throw result.error;
       const closed = await admin.from("source_review_candidates").update({payload,content_kind:contentKind,status:"published",updated_at:new Date().toISOString()}).eq("id",id).eq("owner_id",userId);
       if(closed.error)throw closed.error;
@@ -136,7 +143,7 @@ export async function PATCH(request: Request) {
     }
     if (input.action === "publish_vocabulary") {
       if (contentKind !== "vocabulary") throw new HttpError(400, "Only vocabulary candidates can be added as word cards");
-      if (payload.reviewed_against_pdf !== true) throw new HttpError(400, "词卡尚未对照原页核验");
+      if (payload.reviewed_against_pdf !== true && !administratorApproval) throw new HttpError(400, "词卡尚未对照原页核验");
       const term = String(payload.term ?? "").trim();
       if (!term || term.length > 160) throw new HttpError(400, "A vocabulary entry needs a term");
       if (!String(payload.definition ?? "").trim() || (Array.isArray(payload.extraction_issues) && payload.extraction_issues.length)) throw new HttpError(400, "词卡缺少释义或仍有识别疑点");
@@ -145,7 +152,7 @@ export async function PATCH(request: Request) {
         example: String(payload.example ?? "").slice(0, 4000), tags: Array.isArray(payload.tags) ? payload.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 30) : [],
         part_of_speech:String(payload.part_of_speech??""), pronunciation:String(payload.pronunciation??""), pronunciation_uk:String(payload.pronunciation_uk??""), pronunciation_us:String(payload.pronunciation_us??""),
         source_document_id: candidate.document_id, source_physical_page: candidate.physical_page,
-        source_printed_page: candidate.printed_page, source_verified: true,
+        source_printed_page: candidate.printed_page, source_verified: !administratorApproval,
       };
       const result = await admin.rpc("import_word_card",{p_owner:userId,p_id:id,p_key:candidate.fingerprint,p_data:word});
       if (result.error) throw result.error;
@@ -164,7 +171,7 @@ export async function PATCH(request: Request) {
       throw new HttpError(409, "发现相同题干。请先检查已有题目；不同题目需填写 duplicate_resolution=distinct 和至少 10 字的 duplicate_note，同题的不同范文应合并为参考答案变体");
     }
     let value: ReturnType<typeof validateSourceQuestion>;
-    try { value = validateSourceQuestion(payload, candidate.document_id); }
+    try { value = validateSourceQuestion(payload, candidate.document_id, administratorApproval); }
     catch (error) { throw new HttpError(400, error instanceof Error ? error.message : "题目未通过发布校验"); }
     const identity = sourceExerciseIdentity(payload);
     let duplicate = false;

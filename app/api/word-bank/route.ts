@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (result.data.length !== new Set(ids).size) throw new HttpError(404, "词库条目不可访问");
     for (const word of result.data) {
       const key = createHash("sha256").update(JSON.stringify([word.term.normalize("NFKC").toLowerCase(), word.part_of_speech, word.definition])).digest("hex");
-      const inserted = await admin.rpc("import_word_card", { p_owner: userId, p_id: crypto.randomUUID(), p_key: key, p_data: { ...word, source_verified: true } });
+      const inserted = await admin.rpc("import_word_card", { p_owner: userId, p_id: crypto.randomUUID(), p_key: key, p_data: { ...word, source_verified: !word.tags?.includes("administrator-approved-unverified") } });
       if (inserted.error) throw inserted.error;
     }
     return NextResponse.json({ added: result.data.length });

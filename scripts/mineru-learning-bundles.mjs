@@ -35,6 +35,10 @@ for(const doc of catalog.documents){
       const poses=[...prefix.matchAll(posPattern)].map(m=>m[0].replace(/\s+/g,''));
       const term=prefix.replace(posPattern,'').replace(/^[\\*\s\d.、)]+/,'').replace(/[：:&；;，,\s]+$/,'').replace(/\s*&\s*$/,'').trim();
       if(!/^[A-Za-z][A-Za-z'’\- ()/]*$/.test(term)||term.length>100||term.split(' ').length>7||definition.length>650)continue;
+      // A page label or teaching tip can look like a bilingual vocabulary row.
+      if (/^[A-Za-z]$/.test(term)) continue;
+      if (/^tips?$/i.test(term) && /适用于|注意|建议|题目|例子/.test(definition)) continue;
+      if (/^native speakers$/i.test(term) && /讨论.*话题|短语.*句型/.test(definition)) continue;
       const issues=[];
       if(/(?:[a-z]\s+){4,}[a-z]/i.test(term))issues.push('疑似单词被 OCR 拆成多个字母，需核对');
       if(definition.endsWith('，')||definition.endsWith(',')||/\|/.test(definition))issues.push('释义可能截断或跨栏');

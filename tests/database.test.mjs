@@ -167,6 +167,15 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
         assert.equal((await pg.query("select count(*)::int as count from public.vocabulary_templates where id=$1",[checked])).rows[0].count,1);
         assert.equal((await pg.query("select status from public.source_review_candidates where id=$1",[unchecked])).rows[0].status,"pending");
         assert.equal((await pg.query("select count(*)::int as count from public.vocabulary where id=$1",[checked])).rows[0].count,1);
+        await signedIn(pg);
+        const approved=(await pg.query("select public.publish_administrator_word_cards($1,true) as result",[[unchecked,foreign]])).rows[0].result;
+        assert.deepEqual(approved.map(r=>r.published),[true,false]);
+        await pg.exec("reset role");
+        const published=(await pg.query("select payload,status from source_review_candidates where id=$1",[unchecked])).rows[0];
+        assert.equal(published.status,"published");assert.equal(published.payload.reviewed_against_pdf,false);assert.equal(published.payload.administrator_approval.source_verified,false);
+        assert.equal((await pg.query("select source_verified from vocabulary where id=$1",[unchecked])).rows[0].source_verified,false);
+        await pg.query("select set_config('request.jwt.claims','{}',true)");await pg.query("update profiles set role='member' where id=$1",[owner]);await signedIn(pg);
+        await denied(pg,()=>pg.query("select public.publish_administrator_word_cards($1,true)",[[unchecked]]),/group_admin_required/);
       } finally {await pg.exec("rollback");}
     });
     await t.test("Method guides isolate private owner notes under search and sharing", async () => {

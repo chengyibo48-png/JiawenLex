@@ -52,3 +52,9 @@ test("adapted listening text is labelled and excluded from listening trends", ()
   assert.deepEqual(weakSkills(Array.from({ length: 2 }, () => ({ skill: "listening", learning_kind: "first",
     question_count: 10, correct_count: 0, question_stats: [{ type: "listening_text", count: 10, correct: 0 }] }))), []);
 });
+
+test("Administrator publication retains verification facts and never scores unchecked answers",()=>{
+ const input=payload({reviewed_against_pdf:false,answer_alignment_checked:false,questions:[{...payload().questions[0],verified:false}]});
+ const result=validateSourceQuestion(input,documentId,true);assert.equal(result.reviewed_against_pdf,false);assert.equal(result.questions[0].verified,false);assert.equal(result.questions[0].verification_level,"administrator_approved");assert.equal(isGradableQuestion(result.questions[0]),false);assert.equal(isCorrectAnswer(result.questions[0],'["A","C"]'),false);
+ assert.throws(()=>validateSourceQuestion({...input,passage:""},documentId,true));assert.throws(()=>validateSourceQuestion({...input,extraction_issues:["缺题"]},documentId,true));
+});

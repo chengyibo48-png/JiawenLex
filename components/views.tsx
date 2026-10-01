@@ -976,7 +976,7 @@ export function LibraryView({ data, actions }: Props) {
         </button>)}
       </div>
       {libraryTab === "originals" && <SourceLibraryPanel mode="originals" client={actions.client} lang={lang} notify={actions.notify} />}
-      {libraryTab === "review" && <SourceLibraryPanel mode="review" client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "review" && <SourceLibraryPanel mode="review" isAdmin={data.profile.role === "admin"} client={actions.client} lang={lang} notify={actions.notify} />}
       {libraryTab === "corrections" && <QuestionCorrections client={actions.client} lang={lang} notify={actions.notify} />}
       {libraryTab === "practice" && creating && (
         <section className="card editor-card">

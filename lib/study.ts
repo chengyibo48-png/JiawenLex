@@ -98,7 +98,7 @@ export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], exist
 }
 
 export function isCorrectAnswer(question: Question, answer: string): boolean {
-  if (question.answer_mode === "open") return false;
+  if (question.verification_level === "administrator_approved" || question.answer_mode === "open") return false;
   if (question.answer_mode === "multi_choice") {
     let selected: unknown;
     try { selected = JSON.parse(answer); } catch { return false; }
@@ -113,6 +113,7 @@ export function isCorrectAnswer(question: Question, answer: string): boolean {
 }
 
 export function isGradableQuestion(question: Question): boolean {
+  if (question.verification_level === "administrator_approved") return false;
   if (question.answer_mode === "open") return false;
   if (question.answer_mode === "multi_choice") return question.answers.some((accepted) => accepted.trim()) && !!question.choices?.length;
   return question.answers.some((accepted) => accepted.trim());
