@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BookOpen,
@@ -45,10 +45,12 @@ export function PracticeCatalog({
   const [status, setStatus] = useState("all");
   const [origin,setOrigin]=useState("");
   const [contentMode,setContentMode]=useState("");
-  const all = practiceMaterials(data).filter(
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [skill, search, type, tag, status, origin, contentMode, collection]);
+  const all = useMemo(() => practiceMaterials(data).filter(
     (m) =>
       m.skill === skill && (!m.training_kind || m.training_kind === "none"),
-  );
+  ), [data.materials, data.shares, data.profile.id, skill]);
   const types = [
     ...new Set(
       all
@@ -60,12 +62,18 @@ export function PracticeCatalog({
     ),
   ].sort();
   const tags = [...new Set(all.flatMap((m) => m.tags))].sort();
-  const latest = (id: string) =>
-    data.attempts
-      .filter((a) => a.owner_id === data.profile.id && a.material_id === id)
-      .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))[0];
-  const active = (id: string) =>
-    actions.sessions.sessions.find((s) => s.material_id === id);
+  const latestByMaterial = useMemo(() => {
+    const index = new Map<string, WorkspaceData["attempts"][number]>();
+    for (const attempt of data.attempts) {
+      if (attempt.owner_id !== data.profile.id || !attempt.material_id) continue;
+      const previous = index.get(attempt.material_id);
+      if (!previous || attempt.submitted_at > previous.submitted_at) index.set(attempt.material_id, attempt);
+    }
+    return index;
+  }, [data.attempts, data.profile.id]);
+  const activeByMaterial = useMemo(() => new Map(actions.sessions.sessions.map(session => [session.material_id, session])), [actions.sessions.sessions]);
+  const latest = (id: string) => latestByMaterial.get(id);
+  const active = (id: string) => activeByMaterial.get(id);
   const state = (id: string) =>
     active(id) ? "active" : latest(id) ? "done" : "new";
   const label = (value: string) =>
@@ -100,6 +108,8 @@ export function PracticeCatalog({
         bDate.localeCompare(aDate) || b.created_at.localeCompare(a.created_at)
       );
     });
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(list.length / 40)));
+  const pageRows = list.slice((currentPage - 1) * 40, currentPage * 40);
   const reset = () => {
     setSearch("");
     setType("");
@@ -240,7 +250,7 @@ export function PracticeCatalog({
       </div>
       {grouped ? (
         <MaterialGroups
-          materials={list}
+          materials={pageRows}
           lang={lang}
           render={(material) => {
             const progress = active(material.id),
@@ -315,7 +325,7 @@ export function PracticeCatalog({
         />
       ) : (
         <div className="practice-list">
-          {list.map((material) => {
+          {pageRows.map((material) => {
             const progress = active(material.id),
               last = latest(material.id);
             return (
@@ -418,6 +428,11 @@ export function PracticeCatalog({
           </div>
         </div>
       )}
+      {list.length > 40 && <div className="button-row">
+        <button className="button secondary" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>{t(lang,"上一页","Previous")}</button>
+        <span>{currentPage} / {Math.ceil(list.length / 40)} · {list.length} {t(lang,"组练习","sets")}</span>
+        <button className="button secondary" disabled={currentPage * 40 >= list.length} onClick={() => setPage(currentPage + 1)}>{t(lang,"下一页","Next")}</button>
+      </div>}
     </>
   );
 }

@@ -40,6 +40,13 @@ export function reviewWord(word: VocabularyWord, known: boolean): VocabularyWord
   };
 }
 
+// Dashboard badges need only a count; avoid allocating and sorting the entire queue.
+export function countDueWords(words: VocabularyWord[], now = Date.now()): number {
+  let count = 0;
+  for (const word of words) if (Date.parse(word.due_at) <= now) count++;
+  return count;
+}
+
 export function dueWords(words: VocabularyWord[]): VocabularyWord[] {
   const now = Date.now();
   return words.filter((word) => new Date(word.due_at).getTime() <= now).sort((a, b) => a.due_at.localeCompare(b.due_at));

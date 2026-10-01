@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { WorkspaceData } from "./types";
+import type { VocabularyWord, WorkspaceData } from "./types";
 
 let browserClient: SupabaseClient | null = null;
 
@@ -35,14 +35,16 @@ export function getAdminClient(): SupabaseClient {
 async function visibleRows(client: SupabaseClient, table: string) {
   const rows = [];
   let cursor: string | undefined;
+  let total: number | null = null;
   for (;;) {
-    let query = client.from(table).select("*").order("id", { ascending: true }).limit(500);
+    let query = client.from(table).select("*", cursor ? undefined : { count: "exact" }).order("id", { ascending: true }).limit(1000);
     if (cursor) query = query.gt("id", cursor);
     const result = await query;
     if (result.error) throw result.error;
     const page = result.data ?? [];
     rows.push(...page);
-    if (!page.length) break;
+    if (!cursor) total = result.count ?? null;
+    if (!page.length || (total !== null && rows.length >= total)) break;
     const next = String(page[page.length - 1].id);
     if (next === cursor) throw new Error("Workspace pagination did not advance");
     cursor = next;
@@ -53,6 +55,7 @@ async function visibleRows(client: SupabaseClient, table: string) {
 export async function loadWorkspace(
   client: SupabaseClient,
   userId: string,
+  options: { includeWords?: boolean } = {},
 ): Promise<WorkspaceData> {
   const tables = [
     "profiles",
@@ -71,12 +74,16 @@ export async function loadWorkspace(
     "micro_sessions",
     "micro_attempts",
   ] as const;
-  const results = await Promise.all(
-    tables.map((table) => visibleRows(client, table)),
-  );
-  const firstError = results.find((result) => result.error)?.error;
-  if (firstError) throw firstError;
-  const membersResult = await client.rpc("list_members");
+  const [results, dueResult, membersResult] = await Promise.all([
+    Promise.all(tables.map((table) => table === "vocabulary" && options.includeWords === false
+      ? Promise.resolve({ data: [], error: null })
+      : visibleRows(client, table))),
+    options.includeWords === false
+      ? client.from("vocabulary").select("id", { count: "exact", head: true }).eq("owner_id", userId).lte("due_at", new Date().toISOString())
+      : Promise.resolve(null),
+    client.rpc("list_members"),
+  ]);
+  if (dueResult?.error) throw dueResult.error;
   if (membersResult.error) throw membersResult.error;
   const profile = (results[0].data ?? []).find((row) => row.id === userId);
   if (!profile || profile.status !== "active")
@@ -88,6 +95,8 @@ export async function loadWorkspace(
     tasks: results[1].data ?? [],
     materials: results[2].data ?? [],
     words: results[3].data ?? [],
+    wordsLoaded: options.includeWords !== false,
+    wordDueCount: dueResult?.count ?? undefined,
     attempts: results[4].data ?? [],
     drafts: results[5].data ?? [],
     shares: results[6].data ?? [],
@@ -101,6 +110,11 @@ export async function loadWorkspace(
       b.created_at.localeCompare(a.created_at),
     ),
   } as WorkspaceData;
+}
+
+// Loaded on entry to vocabulary, rather than delaying the dashboard.
+export async function loadVocabulary(client: SupabaseClient): Promise<VocabularyWord[]> {
+  return (await visibleRows(client, "vocabulary")).data as VocabularyWord[];
 }
 
 export async function saveRow(

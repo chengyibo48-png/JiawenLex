@@ -207,6 +207,8 @@ export interface UsageRecord {
 }
 
 export interface WorkspaceData {
+  wordsLoaded?: boolean;
+  wordDueCount?: number;
   microDrafts?: WritingDraft[];
   microAttempts?: import("./micro-training").MicroAttempt[];
   materialVersions?: import("../components/material-organization").MaterialVersion[];

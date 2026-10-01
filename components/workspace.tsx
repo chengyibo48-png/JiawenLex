@@ -1,6 +1,8 @@
 "use client";
 
 import Image from "next/image";
+import dynamic from "next/dynamic";
+import { createSessionRequestQueue, mergeConfirmedRows } from "@/lib/session-requests";
 import { APP_VERSION } from "@/lib/release";
 import { brandAssets } from "@/lib/brand";
 
@@ -28,6 +30,7 @@ import {
   deleteRow,
   getBrowserClient,
   loadWorkspace,
+  loadVocabulary,
   saveRow,
 } from "@/lib/supabase";
 import type {
@@ -37,25 +40,26 @@ import type {
   StudyTask,
   View,
   WorkspaceData,
+  VocabularyWord,
 } from "@/lib/types";
 import { discardLocalDraft, localDraftIds } from "@/lib/offline-drafts";
 import { syncPendingDrafts } from "@/lib/draft-sync";
-import { dueWords, localDate, startOfWeek } from "@/lib/study";
+import { countDueWords, localDate, startOfWeek } from "@/lib/study";
 import { usePracticeSessions } from "./use-practice-sessions";
 import { practiceMaterials } from "@/lib/practice-sessions";
-import { MethodsView } from "./methods-view";
-import { PracticeView } from "./practice-view";
 import { Modal } from "./modal";
-import {
-  AdminView,
-  LibraryView,
-  PlanView,
-  ProgressView,
-  SettingsView,
-  TodayView,
-  VocabularyView,
-  type ViewActions,
-} from "./views";
+import { TodayView } from "./today-view";
+import type { ViewActions } from "./views";
+
+const loadingView = () => <p role="status">正在加载页面… / Loading…</p>;
+const PracticeView = dynamic(() => import("./practice-view").then(m => m.PracticeView), { loading: loadingView });
+const MethodsView = dynamic(() => import("./methods-view").then(m => m.MethodsView), { loading: loadingView });
+const VocabularyView = dynamic(() => import("./views").then(m => m.VocabularyView), { loading: loadingView });
+const LibraryView = dynamic(() => import("./views").then(m => m.LibraryView), { loading: loadingView });
+const PlanView = dynamic(() => import("./views").then(m => m.PlanView), { loading: loadingView });
+const ProgressView = dynamic(() => import("./views").then(m => m.ProgressView), { loading: loadingView });
+const SettingsView = dynamic(() => import("./views").then(m => m.SettingsView), { loading: loadingView });
+const AdminView = dynamic(() => import("./views").then(m => m.AdminView), { loading: loadingView });
 
 const nav: { id: View; zh: string; en: string; icon: typeof House }[] = [
   { id: "today", zh: "今日", en: "Today", icon: House },
@@ -101,7 +105,14 @@ export function Workspace() {
   );
   const [logoutBusy, setLogoutBusy] = useState(false);
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [view]);
-  const refreshBusy = useRef(false);
+  const refreshRun = useRef<Promise<void> | null>(null);
+  const refreshPending = useRef(false);
+  const authGeneration = useRef(0);
+  const wordLoads = useMemo(() => createSessionRequestQueue(), []);
+  const [wordLoadError, setWordLoadError] = useState("");
+  const wordEdits = useRef(new Map<string, VocabularyWord>());
+  const taskEdits = useRef(new Map<string, StudyTask>());
+  const demoQuotaWarned = useRef(false);
   const logoutChecking = useRef(false);
   const logoutSubmitting = useRef(false);
 
@@ -113,34 +124,36 @@ export function Workspace() {
 
   useEffect(() => () => { if (toastTimer.current !== null) window.clearTimeout(toastTimer.current); }, []);
 
-  const refresh = useCallback(async () => {
-    if (demoMode) return;
-    if (!client) return;
-    if (refreshBusy.current) return;
-    refreshBusy.current = true;
-    try {
-      const { data: auth, error: authError } = await client.auth.getUser();
-      if (authError && authError.status !== 401 && authError.status !== 403)
-        throw authError;
-      if (!auth.user) {
-        setUser(null);
-        setData(null);
-        return;
-      }
-      setUser(auth.user);
-      const workspace = await loadWorkspace(client, auth.user.id);
-      setData(workspace);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "账号已停用或个人资料尚未建立"
-      )
-        setData(null);
-      notify(error instanceof Error ? error.message : "加载失败");
-    } finally {
-      refreshBusy.current = false;
-      setLoading(false);
-    }
+  const refresh = useCallback((): Promise<void> => {
+    if (demoMode || !client) return Promise.resolve();
+    refreshPending.current = true;
+    if (refreshRun.current) return refreshRun.current;
+    refreshRun.current = (async () => {
+      do {
+        refreshPending.current = false;
+        const generation = authGeneration.current;
+        const confirmedTasks = new Map<string, StudyTask>();
+        taskEdits.current = confirmedTasks;
+        try {
+          const { data: auth, error: authError } = await client.auth.getUser();
+          if (generation !== authGeneration.current) continue;
+          if (authError && authError.status !== 401 && authError.status !== 403) throw authError;
+          if (!auth.user) { wordEdits.current.clear(); setUser(null); setData(null); continue; }
+          setUser(auth.user);
+          const workspace = await loadWorkspace(client, auth.user.id, { includeWords: false });
+          if (generation !== authGeneration.current) continue;
+          workspace.tasks = mergeConfirmedRows(workspace.tasks, confirmedTasks, auth.user.id);
+          setData(previous => previous?.profile.id === auth.user!.id
+            ? { ...workspace, words: previous.words, wordsLoaded: previous.wordsLoaded }
+            : workspace);
+        } catch (error) {
+          if (generation !== authGeneration.current) continue;
+          if (error instanceof Error && error.message === "账号已停用或个人资料尚未建立") setData(null);
+          notify(error instanceof Error ? error.message : "加载失败");
+        } finally { setLoading(false); }
+      } while (refreshPending.current);
+    })().finally(() => { refreshRun.current = null; });
+    return refreshRun.current;
   }, [client, notify]);
 
   useEffect(() => {
@@ -168,28 +181,58 @@ export function Workspace() {
       )
         window.setTimeout(() => void refresh(), 0);
       if (event === "SIGNED_OUT") {
+        authGeneration.current++;
+        wordLoads.reset();
+        taskEdits.current.clear();
+        wordEdits.current.clear();
         setUser(null);
         setData(null);
         setLoading(false);
       }
     });
     return () => listener.subscription.unsubscribe();
-  }, [client, refresh]);
+  }, [client, refresh, wordLoads]);
+
+  const refreshWords = useCallback((): Promise<void> => {
+    if (!client || !user?.id) return Promise.resolve();
+    const ownerId = user.id, generation = authGeneration.current;
+    return wordLoads.run(ownerId, generation, async () => {
+      const edits = new Map<string, VocabularyWord>();
+      wordEdits.current = edits;
+      setWordLoadError("");
+      try {
+        const words = await loadVocabulary(client);
+        if (generation !== authGeneration.current) return;
+        setData(previous => previous?.profile.id === ownerId ? {
+          ...previous, words: words.map(word => edits.get(word.id) ?? word), wordsLoaded: true,
+        } : previous);
+      } catch (error) {
+        if (generation === authGeneration.current) setWordLoadError(error instanceof Error ? error.message : "词表加载失败");
+      }
+    });
+  }, [client, user?.id, wordLoads]);
+
+  useEffect(() => { setWordLoadError(""); }, [user?.id]);
+
+  useEffect(() => {
+    if (view === "vocabulary" && data && data.wordsLoaded === false && !wordLoadError) void refreshWords();
+  }, [view, data?.profile.id, data?.wordsLoaded, wordLoadError, refreshWords]);
 
   useEffect(() => {
     if (demoMode) return;
     const reload = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    window.addEventListener("online", reload);
-    document.addEventListener("visibilitychange", reload);
+    const resume = () => { reload(); if (view === "vocabulary" && document.visibilityState === "visible") void refreshWords(); };
+    window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", resume);
     const interval = window.setInterval(reload, 30000);
     return () => {
-      window.removeEventListener("online", reload);
-      document.removeEventListener("visibilitychange", reload);
+      window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", resume);
       window.clearInterval(interval);
     };
-  }, [refresh]);
+  }, [refresh, refreshWords, view]);
 
   useEffect(() => {
     if (!client || !user?.id || demoMode) return;
@@ -208,10 +251,17 @@ export function Workspace() {
   }, [client, user?.id, view, refresh]);
 
   useEffect(() => {
-    if (demoMode && data)
-      localStorage.setItem("jiawenlex-demo-v1", JSON.stringify(data));
+    if (demoMode && data) {
+      try { localStorage.setItem("jiawenlex-demo-v1", JSON.stringify(data)); }
+      catch {
+        if (!demoQuotaWarned.current) {
+          demoQuotaWarned.current = true;
+          notify("演示数据超过浏览器保存额度，本次操作暂存内存；已有存档保留。 / Demo storage is full; changes remain in memory.");
+        }
+      }
+    }
     if (data) document.documentElement.dataset.theme = data.profile.theme;
-  }, [data]);
+  }, [data, notify]);
 
   const upsert = useCallback(
     async <K extends keyof WorkspaceData, R extends { id: string }>(
@@ -455,7 +505,19 @@ export function Workspace() {
     updateProfile,
     replacePlan,
     notify,
-    refresh,
+    refresh: async () => { await refresh(); if (view === "vocabulary") await refreshWords(); },
+    acceptTask: (task) => {
+      taskEdits.current.set(task.id, task);
+      setData(previous => previous?.profile.id === task.owner_id ? {
+        ...previous, tasks: previous.tasks.map(existing => existing.id === task.id ? task : existing),
+      } : previous);
+    },
+    acceptWord: (word) => {
+      wordEdits.current.set(word.id, word);
+      setData(previous => previous?.profile.id === word.owner_id ? {
+        ...previous, words: previous.words.map(existing => existing.id === word.id ? word : existing),
+      } : previous);
+    },
     microTarget,
     clearMicroTarget: () => setMicroTarget(null),
     openMicroTraining: (topic, unitKey) =>
@@ -541,7 +603,7 @@ export function Workspace() {
 
   const { profile } = data;
   const lang = profile.language;
-  const due = dueWords(data.words).length;
+  const due = data.wordsLoaded === false ? (data.wordDueCount ?? 0) : countDueWords(data.words);
   const todayTasks = data.tasks.filter(
     (task) =>
       task.planned_date === localDate(new Date(), profile.timezone) &&
@@ -755,7 +817,10 @@ export function Workspace() {
               onInitialConsumed={() => setPracticeMaterialId(null)}
             />
           )}
-          {view === "vocabulary" && (
+          {view === "vocabulary" && data.wordsLoaded === false && <section className="card" role="status">
+            {wordLoadError ? <><p>{wordLoadError}</p><button className="button secondary" onClick={() => void refreshWords()}>重新加载词表 / Retry</button></> : <p>正在加载你的词卡… / Loading your cards…</p>}
+          </section>}
+          {view === "vocabulary" && data.wordsLoaded !== false && (
             <VocabularyView data={data} actions={actions} />
           )}
           {view === "plan" && <PlanView data={data} actions={actions} />}

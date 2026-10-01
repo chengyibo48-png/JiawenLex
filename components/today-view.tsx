@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, Sparkles } from "lucide-react";
 import { answeredCount, practiceMaterials } from "@/lib/practice-sessions";
-import { daysUntil, dueWords, localDate, skillLabels, skills, startOfWeek } from "@/lib/study";
+import { daysUntil, countDueWords, localDate, skillLabels, skills, startOfWeek } from "@/lib/study";
 import type { StudyTask, WorkspaceData } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { t } from "./workspace";
@@ -17,7 +17,7 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
   const backlog = tasks.filter((task) => task.owner_id === profile.id && task.planned_date < today && task.status === "todo").sort((a, b) => b.planned_date.localeCompare(a.planned_date));
   const weekly = tasks.filter((task) => task.owner_id === profile.id && task.week_start === startOfWeek(new Date(), profile.timezone) && task.status !== "skipped");
   const done = weekly.filter((task) => task.status === "done").length;
-  const due = dueWords(words).length, days = daysUntil(profile.target_date, profile.timezone);
+  const due = data.wordsLoaded === false ? (data.wordDueCount ?? 0) : countDueWords(words), days = daysUntil(profile.target_date, profile.timezone);
   const accessible = practiceMaterials(data);
   const resume = profile.track === "academic" ? actions.sessions.sessions.filter((session) => session.state.phase === "active" && accessible.some((m) => m.id === session.material_id)).sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] : undefined;
   const material = resume && accessible.find((m) => m.id === resume.material_id);
@@ -28,9 +28,10 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
     try {
       const row = { ...task, ...patch };
       if (actions.client) {
-        const { data: changed, error } = await actions.client.from("study_tasks").update(patch).eq("id", task.id).eq("owner_id", profile.id).eq("status", "todo").eq("planned_date", task.planned_date).select("id");
+        const { data: changed, error } = await actions.client.from("study_tasks").update(patch).eq("id", task.id).eq("owner_id", profile.id).eq("status", "todo").eq("planned_date", task.planned_date).select("*");
         if (error) throw error;
-        await actions.refresh();
+        if (changed?.[0] && actions.acceptTask) actions.acceptTask(changed[0] as StudyTask);
+        else await actions.refresh();
         if (!changed?.length) { actions.notify(t(lang, "任务已在其他页面变化，请查看最新状态。", "This task changed elsewhere. Check its latest status.")); return; }
       } else await actions.upsert("study_tasks", "tasks", row);
       actions.notify(t(lang, patch.status === "done" ? "任务已完成" : "任务已改期", patch.status === "done" ? "Task completed" : "Task rescheduled"));

@@ -104,6 +104,8 @@ export interface ViewActions {
     materialId?: string | null,
   ) => void;
   acceptDraft: (draft: WritingDraft) => void;
+  acceptWord?: (word: VocabularyWord) => void;
+  acceptTask?: (task: StudyTask) => void;
 }
 
 type Props = { data: WorkspaceData; actions: ViewActions };
@@ -149,18 +151,21 @@ function VocabularyManagerView({ data, actions }: Props) {
   const [wordTags, setWordTags] = useState("");
   const [wordBusy, setWordBusy] = useState(false);
   const wordLock = useRef(false);
-  const wordScope = data.words.filter(
+  const [wordPage, setWordPage] = useState(1);
+  useEffect(() => setWordPage(1), [search, tagFilter]);
+  const wordScope = useMemo(() => data.words.filter(
     (word) => !tagFilter || word.tags.includes(tagFilter),
-  );
-  const tags = [...new Set(data.words.flatMap((word) => word.tags))].sort();
+  ), [data.words, tagFilter]);
+  const tags = useMemo(() => [...new Set(data.words.flatMap((word) => word.tags))].sort(), [data.words]);
   const due = dueWords(wordScope);
-  const filtered = wordScope
+  const filtered = useMemo(() => wordScope
     .filter((word) =>
       (word.term + word.definition)
         .toLowerCase()
         .includes(search.toLowerCase()),
     )
-    .sort((a, b) => a.term.localeCompare(b.term));
+    .sort((a, b) => a.term.localeCompare(b.term)), [wordScope, search]);
+  const currentWordPage = Math.min(wordPage, Math.max(1, Math.ceil(filtered.length / 50)));
 
   async function addWord(event: React.FormEvent) {
     event.preventDefault();
@@ -328,7 +333,7 @@ function VocabularyManagerView({ data, actions }: Props) {
         </div>
         {filtered.length ? (
           <div className="word-list">
-            {filtered.map((word) => (
+            {filtered.slice((currentWordPage - 1) * 50, currentWordPage * 50).map((word) => (
               <div className="word-row" key={word.id}>
                 <div>
                   <strong>{word.term}</strong>
@@ -392,6 +397,11 @@ function VocabularyManagerView({ data, actions }: Props) {
             {t(lang, "还没有匹配的词汇。", "No matching words yet.")}
           </p>
         )}
+        {filtered.length > 50 && <div className="button-row">
+          <button className="button secondary" disabled={currentWordPage === 1} onClick={() => setWordPage(currentWordPage - 1)}>{t(lang,"上一页","Previous")}</button>
+          <span>{currentWordPage} / {Math.ceil(filtered.length / 50)} · {filtered.length} {t(lang,"个词","words")}</span>
+          <button className="button secondary" disabled={currentWordPage * 50 >= filtered.length} onClick={() => setWordPage(currentWordPage + 1)}>{t(lang,"下一页","Next")}</button>
+        </div>}
       </section>
     </div>
   );
@@ -417,10 +427,13 @@ export function PlanView({ data, actions }: Props) {
     setSavingTask(task.id);
     try {
       if (actions.client) {
-        const result = await actions.client.from("study_tasks").update(patch).eq("id", task.id).eq("owner_id", data.profile.id).eq("status", task.status).eq("planned_date", task.planned_date).select("id");
+        const result = await actions.client.from("study_tasks").update(patch).eq("id", task.id).eq("owner_id", data.profile.id).eq("status", task.status).eq("planned_date", task.planned_date).select("*");
         if (result.error) throw result.error;
-        await actions.refresh();
-        if (!result.data?.length) actions.notify(t(lang, "任务已在其他页面变化，请查看最新状态。", "This task changed elsewhere. Check its latest status."));
+        if (result.data?.[0] && actions.acceptTask) actions.acceptTask(result.data[0] as StudyTask);
+        else {
+          await actions.refresh();
+          if (!result.data?.length) actions.notify(t(lang, "任务已在其他页面变化，请查看最新状态。", "This task changed elsewhere. Check its latest status."));
+        }
       } else await actions.upsert("study_tasks", "tasks", { ...task, ...patch });
     } catch (error) { actions.notify(error instanceof Error ? error.message : t(lang, "任务未保存，请重试。", "Task was not saved. Retry.")); }
     finally { taskLock.current = false; setSavingTask(null); }
@@ -670,7 +683,9 @@ export function LibraryView({ data, actions }: Props) {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [recipient, setRecipient] = useState("");
   const [comment, setComment] = useState("");
-  const filtered = data.materials
+  const [materialPage, setMaterialPage] = useState(1);
+  useEffect(() => setMaterialPage(1), [search, collection, skillFilter]);
+  const filtered = useMemo(() => data.materials
     .filter(
       (material) =>
         (!collection || material.collection_title === collection) &&
@@ -686,7 +701,9 @@ export function LibraryView({ data, actions }: Props) {
           .toLowerCase()
           .includes(search.toLowerCase()),
     )
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    .sort((a, b) => b.created_at.localeCompare(a.created_at)), [data.materials, collection, skillFilter, search]);
+  const currentMaterialPage = Math.min(materialPage, Math.max(1, Math.ceil(filtered.length / 50)));
+  const materialPageRows = filtered.slice((currentMaterialPage - 1) * 50, currentMaterialPage * 50);
   const selected =
     data.materials.find((material) => material.id === selectedId) ?? null;
   const threads = selected
@@ -1400,7 +1417,7 @@ export function LibraryView({ data, actions }: Props) {
           <div className="material-list">
             {grouped ? (
               <MaterialGroups
-                materials={filtered}
+                materials={materialPageRows}
                 lang={lang}
                 render={(material) => (
                   <button
@@ -1444,7 +1461,7 @@ export function LibraryView({ data, actions }: Props) {
                 )}
               />
             ) : (
-              filtered.map((material) => (
+              materialPageRows.map((material) => (
                 <button
                   className={`material-row ${selectedId === material.id ? "selected" : ""}`}
                   key={material.id}
@@ -1498,6 +1515,11 @@ export function LibraryView({ data, actions }: Props) {
             </p>
           </div>
         )}
+        {filtered.length > 50 && <div className="button-row">
+          <button className="button secondary" disabled={currentMaterialPage === 1} onClick={() => setMaterialPage(currentMaterialPage - 1)}>{t(lang,"上一页","Previous")}</button>
+          <span>{currentMaterialPage} / {Math.ceil(filtered.length / 50)} · {filtered.length} {t(lang,"组资料","materials")}</span>
+          <button className="button secondary" disabled={currentMaterialPage * 50 >= filtered.length} onClick={() => setMaterialPage(currentMaterialPage + 1)}>{t(lang,"下一页","Next")}</button>
+        </div>}
       </section>}
       {libraryTab === "practice" && selected && (
         <section className="card detail-card">
