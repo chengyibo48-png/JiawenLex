@@ -197,7 +197,7 @@ export function Workspace() {
     const resume = () => { reload(); };
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
-    const interval = window.setInterval(reload, 30000);
+    const interval = window.setInterval(reload, 90000);
     return () => {
       window.removeEventListener("online", resume);
       document.removeEventListener("visibilitychange", resume);

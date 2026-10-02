@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   } catch (error) { return apiError(error); }
 }
 export async function GET(request: Request) {
-  try { const { userId, admin } = await requireUser(request); const result = await admin.from("word_error_reports").select("id,word_id,kind,note,status,created_at,suggestion").eq("owner_id", userId).order("created_at", { ascending: false }).limit(100); if (result.error) throw result.error; return NextResponse.json({ reports: result.data }); }
+  try { const { userId, admin } = await requireUser(request); const result = await admin.from("word_error_reports").select("id,word_id,kind,note,status,created_at,suggestion,snapshot").eq("owner_id", userId).order("created_at", { ascending: false }).limit(100); if (result.error) throw result.error; return NextResponse.json({ reports: result.data.map(({snapshot,...report})=>({...report,term:typeof snapshot?.term==="string"?snapshot.term:null})) },{headers:{"Cache-Control":"private, no-store"}}); }
   catch (error) { return apiError(error); }
 }
 export async function PATCH(request: Request) {

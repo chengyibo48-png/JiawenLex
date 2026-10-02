@@ -694,3 +694,23 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
 @media(max-width:1050px) { .word-collection-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:520px) { .word-collection-grid { gap:12px; } .word-collection-tile { padding:16px; border-radius:18px; } .word-collection-tile strong { font-size:1rem; } .word-collection-tile .muted { font-size:.8rem; } }
 @media(prefers-reduced-motion:reduce) { .word-collection-tile { transition:none; } }
+/* Study workspace polish: quiet hierarchy, readable content, useful focus cues. */
+.word-hub-tools { width:100%; gap:6px; }
+.word-hub-tools button { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:44px; flex:1; }
+.word-global-search { display:grid; gap:9px; padding:20px 24px; border:1px solid var(--border); border-radius:18px; background:var(--surface); }
+.word-global-search label { font-size:.9rem; font-weight:650; }
+.word-global-search > div { display:flex; gap:12px; }
+.word-global-search input { flex:1; min-width:0; }
+.word-global-search button { flex:none; }
+.word-collection-tile { box-shadow:none; min-height:204px; }
+.word-collection-tile .collection-count { margin-top:auto; }
+.question-prompt-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+.question-options label { min-height:44px; display:flex; align-items:flex-start; gap:12px; padding:12px 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface-soft); cursor:pointer; }
+.question-options label:has(input:checked) { border-color:var(--primary); background:var(--primary-soft); }
+.question-options input { flex:none; margin-top:4px; accent-color:var(--primary); }
+.question-options label:focus-within { outline:2px solid var(--primary); outline-offset:2px; }
+.word-overview article { overflow-wrap:anywhere; }
+@media(max-width:620px) { .word-hub-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .word-global-search { padding:16px; } .word-global-search > div { flex-direction:column; } .word-global-search button { width:100%; } .word-collection-tile { min-height:184px; } }
+.question-options input[type="radio"], .question-options input[type="checkbox"] { width:18px; height:18px; min-height:18px; padding:0; }
+.library-tabs.word-hub-tools { width:100%; }
+@media (max-width:620px) { .library-tabs.word-hub-tools { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } }
