@@ -29,8 +29,11 @@ export interface PracticeSession {
   updated_at: string;
 }
 export const sessionLocalId = (materialId: string) => `practice:${materialId}`;
+export function hasListeningAudio(material: Material): boolean {
+  return material.skill === "listening" && !!material.file_path && !!material.file_kind?.startsWith("audio/") && !material.tags.includes("listening-text");
+}
 export function practiceMaterials(data: WorkspaceData): Material[] {
-  return data.materials.filter((m) => m.track === "academic" && (
+  return data.materials.filter((m) => m.track === "academic" && (m.skill !== "listening" || hasListeningAudio(m)) && (
     m.owner_id === data.profile.id || (m.visibility === "shared" && m.approval === "approved") ||
     data.shares.some((g) => g.target_type === "material" && g.target_id === m.id && g.recipient_id === data.profile.id && !g.revoked_at)
   ));
@@ -48,7 +51,7 @@ export function materialStamp(material: Material): string {
 export function initialSessionState(material: Material): PracticeSessionState {
   return { runId: crypto.randomUUID(), phase: "active", materialStamp: materialStamp(material),
     questionIds: material.questions.map((q) => q.id), answers: {}, flagged: [], revealed: [],
-    currentQuestionId: material.questions[0]?.id ?? null, mobilePane: "questions",
+    currentQuestionId: material.questions[0]?.id ?? null, mobilePane: material.skill === "listening" ? "passage" : "questions",
     mode: "practice", durationMinutes: 40, startedAt: null, deadline: null, elapsedSeconds: 0 };
 }
 export function answeredCount(session: PracticeSession, material?: Material): number {

@@ -44,6 +44,7 @@ export function MicroTrainingView({
   ];
   const [topic, setTopic] = useState(actions.microTarget?.topic ?? ""),
     [key, setKey] = useState(actions.microTarget?.unitKey ?? null);
+  const [search,setSearch]=useState(""),[page,setPage]=useState(1);
   const [kind, setKind] = useState<TrainingKind>("none");
   const guard = useRef<(() => Promise<boolean>) | null>(null);
   useEffect(() => {
@@ -55,8 +56,11 @@ export function MicroTrainingView({
   const selected = units.find((unit) => unit.key === key);
   const list = units.filter(
     (unit) =>
-      (kind === "none" || unit.kind === kind) && topicMatches(unit, topic),
+      (kind === "none" || unit.kind === kind) && topicMatches(unit, topic)&&[unit.title,unit.source,...unit.items.map(i=>i.prompt)].join(" ").toLowerCase().includes(search.trim().toLowerCase()),
   );
+  useEffect(()=>setPage(1),[kind,topic,search]);
+  const currentPage=Math.min(page,Math.max(1,Math.ceil(list.length/36)));
+  const visible=list.slice((currentPage-1)*36,currentPage*36);
   const history = (data.microAttempts ?? [])
     .filter((a) => a.owner_id === data.profile.id)
     .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
@@ -72,8 +76,8 @@ export function MicroTrainingView({
           <p>
             {t(
               lang,
-              "先做一个短任务，再核对表达或自评。原创入门内容可直接使用，也支持添加有授权的训练资料。",
-              "Complete a short task, then review its expression or self-check. Original starter content is ready; authorised custom material is supported.",
+              "先做一个短任务，再核对表达或自评。已发布的口语 Part 1 和翻译资料可以直接做短训练；原题保留来源，自编内容明确标注。",
+              "Complete a short task, then review its expression or self-check. Published Part 1 and translation materials are available as short exercises with clear sources.",
             )}
           </p>
         </div>
@@ -104,7 +108,7 @@ export function MicroTrainingView({
         </>
       ) : (
         <>
-          <div className="micro-filter">
+          <div className="micro-filter"><label>{t(lang,"搜索题目与来源","Search questions and sources")}<input maxLength={100} value={search} onChange={e=>setSearch(e.target.value)}/></label>
             <label>
               {t(lang, "训练类型", "Training type")}
               <select
@@ -134,7 +138,7 @@ export function MicroTrainingView({
             )}
           </div>
           <div className="micro-grid">
-            {list.map((unit) => {
+            {visible.map((unit) => {
               const draft = data.microDrafts?.find(
                   (d) => d.material_id === `micro:${unit.key}`,
                 ),
@@ -146,7 +150,7 @@ export function MicroTrainingView({
                     {trainingNames[unit.kind][lang === "zh" ? 0 : 1]} ·{" "}
                     {unit.minutes} min
                   </span>
-                  <h3>{unit.title}</h3>
+                  <h3>{unit.title}</h3><span className="source-origin">{unit.origin==="source"?t(lang,"资料原题","Source question"):unit.origin==="mixed"?t(lang,"原题与改编","Mixed origins"):t(lang,"自编 / 改编练习","Original / adapted exercise")}</span>{unit.origin&&unit.sourceVerified===false&&<p className="muted small">{t(lang,"管理员批准发布 · 原页待核验","Administrator approved · Source verification pending")}</p>}
                   <p>{unit.description}</p>
                   <p className="muted small">
                     {unit.items.length} {t(lang, "项训练", "items")} ·{" "}
@@ -183,6 +187,7 @@ export function MicroTrainingView({
               );
             })}
           </div>
+          <div className="button-row"><span>{list.length} {t(lang,"组微练习","micro sets")} · {currentPage} / {Math.max(1,Math.ceil(list.length/36))}</span><button className="button secondary" disabled={currentPage<=1} onClick={()=>setPage(currentPage-1)}>{t(lang,"上一页","Previous")}</button><button className="button secondary" disabled={currentPage*36>=list.length} onClick={()=>setPage(currentPage+1)}>{t(lang,"下一页","Next")}</button></div>
           {!list.length && (
             <section className="card empty-inline">
               <strong>
@@ -199,7 +204,7 @@ export function MicroTrainingView({
                   "Themes use explicit tags. Clear the theme or add authorised content and completion criteria in the library.",
                 )}
               </p>
-              <button className="button secondary" onClick={() => setTopic("")}>
+              <button className="button secondary" onClick={() => {setTopic("");setKind("none");setSearch("");}}>
                 {t(lang, "查看全部训练", "View all training")}
               </button>
             </section>
@@ -528,7 +533,7 @@ function MicroTrainer({
     <section className="card micro-trainer">
       <div className="card-top">
         <div>
-          <h3>{unit.title}</h3>
+          <h3>{unit.title}</h3><span className="source-origin">{unit.origin==="source"?t(lang,"资料原题","Source question"):unit.origin==="mixed"?t(lang,"原题与改编","Mixed origins"):t(lang,"自编 / 改编练习","Original / adapted exercise")}</span>{unit.origin&&unit.sourceVerified===false&&<p className="muted small">{t(lang,"管理员批准发布 · 原页待核验","Administrator approved · Source verification pending")}</p>}
           <p className="muted small">{completionRule(unit.kind, lang)}</p>
         </div>
         <span className="timer-pill">
@@ -593,6 +598,7 @@ function MicroTrainer({
               </button>
             ))}
           </div>
+          {item.sourcePage&&<p className="muted small">{item.origin==="adapted"?t(lang,"改编练习","Adapted exercise"):t(lang,"资料原题","Source question")} · {t(lang,`PDF 第 ${item.sourcePage} 页`,`PDF page ${item.sourcePage}`)}</p>}
           <div className="micro-context">{item.context}</div>
           <h4>{item.prompt}</h4>
           {unit.kind === "paraphrase" ? (
@@ -659,7 +665,7 @@ function MicroTrainer({
               }
               onClick={() => edit({ revealed: [...state.revealed, item.id] })}
             >
-              {t(lang, "核对参考与解释", "Review reference and explanation")}
+              {t(lang, item.answers.length?"核对参考与解释":"查看自评标准", item.answers.length?"Review reference and explanation":"Review self-check criteria")}
             </button>
           ) : (
             <div className="micro-reference">
@@ -668,8 +674,8 @@ function MicroTrainer({
                   ? t(lang, "语境答案", "Context answer")
                   : t(
                       lang,
-                      "参考表达（不是唯一答案）",
-                      "Reference expression (not the only answer)",
+                      item.answers.length?"参考表达（不是唯一答案）":"自评标准（无唯一参考答案）",
+                      item.answers.length?"Reference expression (not the only answer)":"Self-check criteria (no unique reference answer)",
                     )}
               </strong>
               {item.answers.map((answer) => (

@@ -1,7 +1,10 @@
 import type { Material, Language, Skill, WritingDraft } from "./types";
+import { additionalMicroUnits } from "./micro-extras";
 import { normalizeTerm } from "./review";
 export type TrainingKind = "none" | "paraphrase" | "rewrite" | "speaking_part1";
 export interface MicroItem {
+  sourcePage?: number;
+  origin?: "source" | "adapted";
   id: string;
   prompt: string;
   context: string;
@@ -14,6 +17,8 @@ export interface MicroUnit {
   key: string;
   stamp: string;
   materialId: string | null;
+  origin?: "source" | "adapted" | "mixed";
+  sourceVerified?: boolean;
   kind: Exclude<TrainingKind, "none">;
   skill: Skill;
   title: string;
@@ -325,11 +330,11 @@ export const originalUnits: MicroUnit[] = [
       },
     ],
   },
+  ...additionalMicroUnits,
 ];
 export function materialUnit(m: Material): MicroUnit | null {
+  if(!m.training_kind||m.training_kind==="none")return sourceMicroUnit(m);
   if (
-    !m.training_kind ||
-    m.training_kind === "none" ||
     !m.source_title.trim() ||
     !m.license_name.trim() ||
     !m.questions?.length
@@ -380,6 +385,14 @@ export function materialUnit(m: Material): MicroUnit | null {
     permission: m.license_name,
     items,
   };
+}
+function sourceMicroUnit(m: Material): MicroUnit | null {
+  const speaking=m.skill==="speaking"&&/part\s*1/i.test(m.question_type);
+  const translation=m.skill==="writing"&&m.question_type==="Translation";
+  if((!speaking&&!translation)||!m.source_title.trim()||!m.license_name.trim()||!m.questions?.length||m.questions.length>5||m.questions.some(q=>q.answer_mode!=="open"||!q.prompt.trim()||!q.source_refs?.length))return null;
+  const items=m.questions.map(q=>({id:q.id,sourcePage:q.source_physical_page,origin:q.origin_kind,prompt:q.prompt,context:translation?"将原句译成自然英文，保留限定词和逻辑关系。":"请先开口回答，再记录回答或笔记。",choices:[],answers:q.reference_answers??[],explanation:q.explanation||"开放回答没有唯一标准答案；按下列标准自评，不生成雅思分数。",checklist:q.checklist?.length?q.checklist:translation?["完整保留原意","语法和句子结构完整","核对参考后记录需要改进之处"]:["直接回应问题","给出相关原因或具体细节","已开口练习"]}));
+  if(translation&&items.some(i=>!i.answers.length))return null;
+  return {key:`material:${m.id}`,stamp:`source-micro-1-v${m.revision??1}`,materialId:m.id,kind:speaking?"speaking_part1":"rewrite",skill:m.skill,title:m.title,description:speaking?"资料原题短答：先回答，再自评。":"资料原题翻译：参考表达不是唯一答案。",minutes:speaking?3:5,topics:speaking?["口语","fluency",...m.tags]:["翻译","grammar","语法",...m.tags],source:`${m.source_title} · PDF 第 ${m.source_physical_page??m.questions[0].source_physical_page??"待核对"} 页`,permission:m.license_name,origin:m.origin_kind,sourceVerified:m.questions.every(q=>q.verified===true),items};
 }
 const aliases: Record<string, string[]> = {
   grammar: [

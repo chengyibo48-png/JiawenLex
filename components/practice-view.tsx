@@ -21,6 +21,7 @@ import { PracticeCatalog } from "./practice-catalog";
 import { QuestionPractice } from "./question-practice";
 import { PracticeSessionPanel } from "./practice-session-panel";
 import {
+  hasListeningAudio,
   initialSessionState,
   materialStamp,
   practiceMaterials,
@@ -88,6 +89,7 @@ export function PracticeView({
   const [finished, setFinished] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioReady,setAudioReady]=useState(false),[audioError,setAudioError]=useState(false),[audioReload,setAudioReload]=useState(0);
   const [figureUrl, setFigureUrl] = useState<string | null>(null);
   useEffect(() => { window.scrollTo({ top: 0, left: 0 }); }, [selectedId]);
   const [recording, setRecording] = useState(false);
@@ -123,7 +125,7 @@ export function PracticeView({
       const material = practiceMaterials(data).find(
         (item) => item.id === initialMaterialId,
       );
-      if (material) {
+      if (material && (material.skill!=="listening" || hasListeningAudio(material))) {
         setArea("sets");
         setSkill(material.skill);
         responseVersion.current = null;
@@ -391,6 +393,7 @@ export function PracticeView({
   ]);
 
   useEffect(() => {
+    setAudioUrl(null);setAudioReady(false);setAudioError(false);
     if (
       !selected?.file_path ||
       !selected.file_kind?.startsWith("audio") ||
@@ -407,11 +410,11 @@ export function PracticeView({
       .then((value) => {
         if (active) setAudioUrl((value as { url: string }).url);
       })
-      .catch(() => setAudioUrl(null));
+      .catch(() => {if(active){setAudioUrl(null);setAudioError(true);}});
     return () => {
       active = false;
     };
-  }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client]);
+  }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client,audioReload]);
 
   useEffect(() => {
     if (!selected?.file_path || !selected.file_kind?.startsWith("image/") || !actions.client) { setFigureUrl(null); return; }
@@ -420,7 +423,7 @@ export function PracticeView({
       .then((value) => { if (active) setFigureUrl((value as { url: string }).url); })
       .catch(() => { if (active) setFigureUrl(null); });
     return () => { active = false; };
-  }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client]);
+  }, [selected?.id, selected?.file_path, selected?.file_kind, actions.client,audioReload]);
 
   useEffect(
     () => () => {
@@ -438,6 +441,7 @@ export function PracticeView({
   }, []);
 
   async function selectMaterial(material: Material) {
+    if(material.skill==="listening"&&!hasListeningAudio(material)){actions.notify(t(lang,"这份资料没有配套录音，请在资料库查看。","This material has no recording. Open it in the library."));return;}
     if (!(await canLeavePractice())) return;
     attemptId.current = null;
     feedbackCache.current = null;
@@ -463,10 +467,11 @@ export function PracticeView({
     setSaveRecording(false);
     setPendingTaskId(null);
     setPendingAudioPath(null);
-    setMobilePane("questions");
+    setMobilePane(material.skill === "listening" ? "passage" : "questions");
   }
 
   function begin() {
+    if(selected?.skill==="listening"&&(!hasListeningAudio(selected)||!audioReady)){actions.notify(t(lang,"录音尚未就绪，请等待加载或重试。","Wait for the recording to load or retry."));return;}
     const now = Date.now();
     setStartedAt(now);
     setElapsed(0);
@@ -1206,6 +1211,7 @@ export function PracticeView({
                     revealed.length > 0 ||
                     startedAt !== null ||
                     !sessionReady ||
+                    (selected.skill==="listening"&&!audioReady) ||
                     !!sessionConflict ||
                     !!materialChanged
                   }
@@ -1228,6 +1234,7 @@ export function PracticeView({
                     revealed.length > 0 ||
                     startedAt !== null ||
                     !sessionReady ||
+                    (selected.skill==="listening"&&!audioReady) ||
                     !!sessionConflict ||
                     !!materialChanged
                   }
@@ -1256,6 +1263,7 @@ export function PracticeView({
                     finished ||
                     startedAt !== null ||
                     !sessionReady ||
+                    (selected.skill==="listening"&&!audioReady) ||
                     !!sessionConflict ||
                     !!materialChanged
                   }
@@ -1273,6 +1281,7 @@ export function PracticeView({
                     busy ||
                     finished ||
                     !sessionReady ||
+                    (selected.skill==="listening"&&!audioReady) ||
                     !!sessionConflict ||
                     !!materialChanged
                   }
@@ -1336,6 +1345,7 @@ export function PracticeView({
                     );
                 }}
               />
+              {selected.skill==="listening"&&!audioReady&&<div className="notice info" role="status">{audioError?t(lang,"录音暂时无法加载，答题暂缓开放，已有答案保留。","Recording unavailable. Answers are preserved; retry to continue."):t(lang,"正在加载配套录音…","Loading the recording…")} <button className="button secondary small" onClick={()=>setAudioReload(v=>v+1)}>{t(lang,"重新加载录音","Reload recording")}</button></div>}
               <QuestionPractice
                 material={selected}
                 lang={lang}
@@ -1347,7 +1357,8 @@ export function PracticeView({
                 finished={finished}
                 busy={busy}
                 locked={!!sessionConflict || !!materialChanged}
-                ready={sessionReady}
+                ready={sessionReady && (selected.skill!=="listening"||audioReady)}
+                onAudioStatus={value=>{setAudioReady(value);if(!value)setAudioError(true);}}
                 mobilePane={mobilePane}
                 audioUrl={audioUrl}
                 figureUrl={figureUrl}
