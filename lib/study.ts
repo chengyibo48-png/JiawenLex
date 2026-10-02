@@ -104,6 +104,28 @@ export function generateWeeklyTasks(profile: Profile, attempts: Attempt[], exist
   return [...preserved, ...newTasks];
 }
 
+
+/** Interpret only explicit answer rubrics, never numbers in the question stem. */
+export function answerWordRule(question: Pick<Question, "word_limit" | "answer_limit_text">): { words: number; additionalNumber: boolean } | null {
+  const rubric = question.answer_limit_text?.normalize("NFKC").toUpperCase() ?? "";
+  const names: Record<string, number> = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
+  const match = /(?:NO MORE THAN\s+)?(ONE|TWO|THREE|FOUR|FIVE|\d+)\s+WORDS?\b/.exec(rubric);
+  const inferred = match ? names[match[1]] ?? Number(match[1]) : undefined;
+  const words = question.word_limit ?? inferred;
+  if (!Number.isSafeInteger(words) || !words || words < 1) return null;
+  return { words, additionalNumber: /WORDS?\s+AND\s*\/\s*OR\s+(?:A\s+)?NUMBER\b/.test(rubric) || /WORDS?\s+AND\s+(?:A\s+)?NUMBER\b/.test(rubric) };
+}
+
+export function withinAnswerWordRule(question: Pick<Question, "word_limit" | "answer_limit_text">, answer: string): boolean {
+  const rule = answerWordRule(question);
+  if (!rule) return true;
+  // A hyphenated word remains one token. An explicit AND/OR A NUMBER permits
+  // one numeric token in addition to the word allowance; it is not a third word.
+  const tokens = answer.normalize("NFKC").trim().split(/\s+/).filter(Boolean);
+  const numeric = tokens.filter((token) => /^[+-]?(?:\d+(?:[,.:/-]\d+)*)(?:%)?$/.test(token)).length;
+  return tokens.length - (rule.additionalNumber && numeric > 0 ? 1 : 0) <= rule.words;
+}
+
 export function isCorrectAnswer(question: Question, answer: string): boolean {
   if (question.verification_level === "administrator_approved" || question.answer_mode === "open") return false;
   if (question.answer_mode === "multi_choice") {
@@ -115,7 +137,7 @@ export function isCorrectAnswer(question: Question, answer: string): boolean {
     return expected.length > 0 && expected.length === actual.length && expected.every((item, index) => item === actual[index]);
   }
   if (!question.answers.some((accepted) => accepted.trim()) || !answer.trim()) return false;
-  if (question.word_limit && answer.trim().split(/\s+/).length > question.word_limit) return false;
+  if (question.answer_mode !== "single_choice" && !withinAnswerWordRule(question, answer)) return false;
   return question.answers.some((accepted) => accepted.trim() && normaliseAnswer(accepted) === normaliseAnswer(answer));
 }
 

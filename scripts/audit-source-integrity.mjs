@@ -1,7 +1,10 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';import pg from 'pg';import {validateSourceQuestion} from '../lib/source-question.ts';
 const root='.source-archive';const cat=JSON.parse(await readFile(`${root}/source-catalog.json`,'utf8')).documents;const pm=JSON.parse(await readFile(`${root}/parse-manifest.json`,'utf8'));const owner='368e5c9a-c4ce-4b12-9fea-39105bafbeb1';
 const u=new URL(process.env.DATABASE_URL);u.searchParams.delete('sslmode');const c=new pg.Client({connectionString:u.toString(),ssl:{rejectUnauthorized:false}});await c.connect();try{
-const candidates=(await c.query("select id,document_id,physical_page,content_kind,status,case when status='published' then payload else jsonb_build_object('reviewed_against_pdf',payload->'reviewed_against_pdf') end as payload from source_review_candidates where owner_id=$1",[owner])).rows;
+// Bound each read: large OCR payloads can exceed the server statement timeout.
+const candidates=[];let after='00000000-0000-0000-0000-000000000000';
+while(true){const page=(await c.query("select id,document_id,physical_page,content_kind,status,case when status='published' then payload else jsonb_build_object('reviewed_against_pdf',payload->'reviewed_against_pdf') end as payload from source_review_candidates where owner_id=$1 and id>$2 order by id limit 100",[owner,after])).rows;if(!page.length)break;candidates.push(...page);after=page.at(-1).id;}
+
 const docs=(await c.query('select id,sha256,page_count,status,parse_status from source_documents where owner_id=$1',[owner])).rows;
 const mats=(await c.query('select id,source_document_id,source_physical_page,title,questions,origin_kind,skill,passage,transcript,file_kind,file_path,visibility,approval from materials where owner_id=$1 and source_document_id is not null',[owner])).rows;
 const pageAudit=(await c.query('select a.document_id,a.physical_page,a.status from public.source_page_audit a join public.source_documents d on d.id=a.document_id where d.owner_id=$1',[owner])).rows;

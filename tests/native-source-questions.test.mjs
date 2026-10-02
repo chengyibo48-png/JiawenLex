@@ -58,3 +58,14 @@ test("Administrator publication retains verification facts and never scores unch
  const result=validateSourceQuestion(input,documentId,true);assert.equal(result.reviewed_against_pdf,false);assert.equal(result.questions[0].verified,false);assert.equal(result.questions[0].verification_level,"administrator_approved");assert.equal(isGradableQuestion(result.questions[0]),false);assert.equal(isCorrectAnswer(result.questions[0],'["A","C"]'),false);
  assert.throws(()=>validateSourceQuestion({...input,passage:""},documentId,true));assert.throws(()=>validateSourceQuestion({...input,extraction_issues:["缺题"]},documentId,true));
 });
+
+
+test("explicit imported word rubrics participate in grading without changing saved answers", () => {
+ const q = { ...payload().questions[0], answer_mode: "text", choices: undefined, answers: ["very large gardens"], answer_limit_text: "NO MORE THAN TWO WORDS" };
+ assert.equal(isCorrectAnswer(q,"very large gardens"),false);
+ assert.equal(isCorrectAnswer({...q,answers:["formal gardens"]},"formal gardens"),true);
+ assert.equal(isCorrectAnswer({...q,answers:["25 formal gardens"],answer_limit_text:"NO MORE THAN TWO WORDS AND/OR A NUMBER"},"25 formal gardens"),true);
+ assert.equal(isCorrectAnswer({...q,answers:["25 very large gardens"],answer_limit_text:"NO MORE THAN TWO WORDS AND/OR A NUMBER"},"25 very large gardens"),false);
+ assert.equal(isCorrectAnswer({...q,answers:["well-known buildings"]},"well-known buildings"),true);
+ assert.equal(isCorrectAnswer({...q,answer_mode:"single_choice",answers:["A very large gardens"],choices:["A very large gardens"]},"A very large gardens"),true);
+});
