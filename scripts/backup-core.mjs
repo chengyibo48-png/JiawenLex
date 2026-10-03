@@ -159,6 +159,7 @@ export function recoveryTableData(toc) {
     if (!match) continue;
     const [, schema, table] = match;
     if (schema === "public") {
+      if (table === "member_presence") continue; // Ephemeral presence must not revive after restore.
       if (!recoveryTables.includes(table))
         throw new Error(
           "Unexpected application table in backup; review recovery scope first",

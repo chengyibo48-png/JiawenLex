@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { createClient } from "@supabase/supabase-js";
+import pg from "pg";
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { encryptionKey, encrypt, decrypt, hash, snapshotPrefix, validateManifest, validateBytes, assertRecoveryTarget, deletionReplaySql, verifyThenPrune, recoveryTables, recoveryTableData } from "./backup-core.mjs";
 
@@ -111,16 +112,16 @@ function sourceRestorer() {
     bucket: required("SOURCE_S3_BUCKET"),
   };
 }
-async function readySourceRows(client) {
-  const rows = [];
-  for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await client.from("source_documents")
-      .select("object_key,sha256,byte_size").eq("status", "ready")
-      .order("object_key").range(offset, offset + 999);
-    if (error) throw error;
-    rows.push(...data ?? []);
-    if (!data || data.length < 1000) return rows;
-  }
+async function readInventory(sql) {
+  const url = new URL(required("DATABASE_URL"));
+  url.searchParams.delete("sslmode");
+  const client = new pg.Client({ connectionString: url.toString(), ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 15000 });
+  await client.connect();
+  try { return (await client.query(sql)).rows; }
+  finally { await client.end(); }
+}
+async function readySourceRows() {
+  return readInventory("select object_key, sha256, byte_size from public.source_documents where status='ready' order by object_key");
 }
 async function latestSnapshot() {
   if (process.env.SNAPSHOT_PREFIX) return snapshotPrefix(process.env.SNAPSHOT_PREFIX);
@@ -133,15 +134,18 @@ async function backup() {
   let activePrefix, verified = false;
   try {
     const client = createClient(required("NEXT_PUBLIC_SUPABASE_URL"), supabaseServerKey(), { auth: { persistSession: false } });
-    const sourceInventoryBeforeDump = await readySourceRows(client);
+    const sourceInventoryBeforeDump = await readySourceRows();
     const dumpPath = join(dir, "database.dump");
-    await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--exclude-table-data=public.source_import_tokens", "--exclude-table-data=public.source_upload_sessions", "--file", dumpPath], required("DATABASE_URL"));
+    await run("pg_dump", ["--format=custom", "--no-owner", "--no-subscriptions", "--exclude-schema=cron", "--exclude-schema=net", "--exclude-schema=vault", "--exclude-table-data=auth.sessions", "--exclude-table-data=auth.refresh_tokens", "--exclude-table-data=public.source_import_tokens", "--exclude-table-data=public.source_upload_sessions", "--exclude-table-data=public.member_presence", "--file", dumpPath], required("DATABASE_URL"));
     const dump = await readFile(dumpPath);
     const prefix = `snapshots/${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}/`;
     activePrefix = prefix;
     await put(`${prefix}database.jlex`, dump);
     const files = [];
+    const storageInventory = await readInventory("select bucket_id, count(*)::int as objects from storage.objects where bucket_id in ('study-files','study-audio') group by bucket_id");
+    const occupiedBuckets = new Set(storageInventory.filter((row) => row.objects > 0).map((row) => row.bucket_id));
     for (const bucketName of ["study-files", "study-audio"]) {
+      if (!occupiedBuckets.has(bucketName)) continue;
       for (const path of await storagePaths(client, bucketName)) {
         const { data, error } = await client.storage.from(bucketName).download(path);
         if (error) throw error;
@@ -151,7 +155,7 @@ async function backup() {
         files.push({ bucket: bucketName, path, objectKey, sha256: hash(bytes), bytes: bytes.length, ...(data.type && /^[\w.+-]+\/[\w.+-]+$/.test(data.type) ? { contentType: data.type } : {}) });
       }
     }
-    const sourceRows = await readySourceRows(client);
+    const sourceRows = await readySourceRows();
     if (JSON.stringify(sourceRows) !== JSON.stringify(sourceInventoryBeforeDump))
       throw new Error("Original PDF inventory changed during database backup; retry to avoid an incomplete snapshot");
     const sourceStore = sourceRows.length ? sourceReader() : null;
@@ -180,7 +184,7 @@ async function backup() {
       }
       sources.push({ sourceKey: row.object_key, objectKey, sha256: row.sha256, bytes });
     }
-    if (JSON.stringify(await readySourceRows(client)) !== JSON.stringify(sourceRows))
+    if (JSON.stringify(await readySourceRows()) !== JSON.stringify(sourceRows))
       throw new Error("Original PDF inventory changed while copying source files; retry the backup");
     const manifest = { version: 3, at: new Date().toISOString(), database: { objectKey: `${prefix}database.jlex`, sha256: hash(dump), bytes: dump.length }, files, sources };
     // Upload, download and verify the new snapshot before it can displace an old one.

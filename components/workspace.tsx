@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { useMemberPresence } from "./use-member-presence";
 import dynamic from "next/dynamic";
 import { mergeConfirmedRows } from "@/lib/session-requests";
 import { APP_VERSION } from "@/lib/release";
@@ -95,6 +96,7 @@ export function Workspace() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [resetFlow, setResetFlow] = useState(false);
   const [practiceSkill, setPracticeSkill] = useState<Skill>("reading");
+  useMemberPresence(client, data?.profile.id, view, practiceSkill);
   const leavePractice = useRef<
     ((reason?: "navigate" | "logout") => Promise<boolean>) | null
   >(null);

@@ -1,4 +1,5 @@
 "use client";
+import { AdminActivity } from "./admin-activity";
 import { VocabularyCollections } from "./vocabulary-collections";
 import { APP_VERSION } from "@/lib/release";
 
@@ -2589,6 +2590,7 @@ export function SettingsView({
       <AiSettings draft={draft} onChangeDraft={setDraft} saving={settingsBusy} onSavePreference={saveAiPreference} client={actions.client} notify={actions.notify} />
       <section className="card">
         <h3>{t(lang, "账号与会话", "Account and sessions")}</h3>
+        <p className="muted small">{t(lang, "小组管理员可查看成员在线状态、当前模块及已提交的答题和学习记录；未提交草稿与 API 密钥不在该界面展示。", "Group administrators can view presence, current module and submitted study records. Unsubmitted drafts and API keys are excluded from that interface.")}</p>
         <div className="button-row">
           <button
             className="button secondary"
@@ -2701,12 +2703,13 @@ export function AdminView({ data, actions }: Props) {
           <p>
             {t(
               lang,
-              "管理邀请与共享资料。成员私人学习记录不会出现在这里。",
-              "Manage invitations and shared material. Private study records stay private.",
+              "管理邀请、共享资料，以及成员在线情况与各模块已提交答题记录。",
+              "Manage invitations, shared material, member presence and submitted study records.",
             )}
           </p>
         </div>
       </div>
+      <AdminActivity client={actions.client} />
       <section className="card">
         <h3>{t(lang, "服务配置情况", "Service configuration")}</h3>
         <p className="muted small">

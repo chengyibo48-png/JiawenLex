@@ -54,7 +54,7 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
       await pg.query("insert into auth.users(id,email,raw_user_meta_data) values ($1,$2,$3)", [id, name + "@example.invalid", JSON.stringify({ invite_code: fixtureInvite, display_name: name })]);
     }
     await t.test("Original archive and correction rows are service API only", async () => {
-      for (const table of ["source_documents", "source_upload_sessions", "source_parse_batches", "source_review_candidates", "source_import_tokens", "question_error_reports"]) {
+      for (const table of ["member_presence", "source_documents", "source_upload_sessions", "source_parse_batches", "source_review_candidates", "source_import_tokens", "question_error_reports"]) {
         const result = await pg.query(
           "select has_table_privilege('anon',$1,'select') as anon_read, has_table_privilege('authenticated',$1,'select') as member_read, has_table_privilege('authenticated',$1,'insert') as member_insert, has_table_privilege('authenticated',$1,'update') as member_update, has_table_privilege('authenticated',$1,'delete') as member_delete",
           ["public." + table],
