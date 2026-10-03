@@ -4,7 +4,7 @@ import { HttpError } from "./server-auth";
 
 export const SOURCE_MAX_FILE_BYTES = 536_870_912;
 export const SOURCE_PART_BYTES = 16 * 1024 * 1024;
-export const SOURCE_DEFAULT_BUCKET_BYTES = 3_000_000_000;
+export const SOURCE_DEFAULT_BUCKET_BYTES = 8_000_000_000;
 
 export function sourceStorage() {
   const endpoint = process.env.SOURCE_S3_ENDPOINT;
@@ -19,7 +19,7 @@ export function sourceStorage() {
     throw new HttpError(503, "Document storage endpoint must be an HTTPS origin");
   const maxBytes = Number(process.env.SOURCE_MAX_STORAGE_BYTES ?? SOURCE_DEFAULT_BUCKET_BYTES);
   if (!Number.isSafeInteger(maxBytes) || maxBytes < SOURCE_MAX_FILE_BYTES || maxBytes > SOURCE_DEFAULT_BUCKET_BYTES)
-    throw new HttpError(503, "Document storage limit must be between 512 MiB and 3 GB");
+    throw new HttpError(503, "Document storage limit must be between 512 MiB and 8 GB");
   return {
     bucket,
     maxBytes,

@@ -18,7 +18,7 @@ import { assertReleaseMutation } from "./release-policy.mjs";
 // Originals are never rewritten. No credentials are stored in manifests or logs.
 const PART_BYTES = 16 * 1024 * 1024;
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
-const MAX_STORAGE_BYTES = 3_000_000_000;
+const MAX_STORAGE_BYTES = 8_000_000_000;
 const EXPECTED_COUNT = 94;
 const EXPECTED_PAGES = 10086;
 const EXPECTED_BYTES = 2205616946;

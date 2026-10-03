@@ -105,7 +105,7 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 2. 在 bucket 的 CORS 中只允许 `https://jiawen-lex.vercel.app` 和 `http://localhost:3000`。S3-compatible API 规则使用 `GET`、`PUT`、`HEAD`，Allowed Headers 设 `*`，Expose Header 包含 `ETag`。分片上传需要浏览器读取 ETag 才能完成。
 3. 为未完成的分片上传配置 **7 天后 AbortIncompleteMultipartUpload**。不要给已完成原始 PDF 设置过期规则。参照 [B2 S3 生命周期配置](https://www.backblaze.com/apidocs/s3-put-lifecycle-configuration) 与 [CORS 规则](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules)。
 4. 创建两个只授权这个原始资料 bucket 的应用密钥：一个 **Read and Write** 给 Vercel 上传，另一个 **Read Only** 给 GitHub 每周备份。不要复用备份 bucket 密钥。
-5. 将下面变量填入 Vercel Production 并 Redeploy。`SOURCE_MAX_STORAGE_BYTES` 固定为 `3000000000`，用于应用层暂停保护。
+5. 将下面变量填入 Vercel Production 并 Redeploy。`SOURCE_MAX_STORAGE_BYTES` 设置为 `8000000000`，用于应用层暂停保护。
 
 | Vercel 变量 | 来源 |
 | --- | --- |
@@ -114,7 +114,7 @@ API Key 相当于服务调用凭证，**不是登录密码**。在 JiawenLex 的
 | `SOURCE_S3_BUCKET` | 原始资料 bucket 名 |
 | `SOURCE_S3_ACCESS_KEY_ID` | 原始资料 bucket 的 Read and Write keyID |
 | `SOURCE_S3_SECRET_ACCESS_KEY` | 对应 applicationKey |
-| `SOURCE_MAX_STORAGE_BYTES` | `3000000000` |
+| `SOURCE_MAX_STORAGE_BYTES` | `8000000000` |
 
 6. 把同一 endpoint、region、bucket，以及 Read Only 密钥的 `SOURCE_BACKUP_S3_ACCESS_KEY_ID`、`SOURCE_BACKUP_S3_SECRET_ACCESS_KEY` 加到 GitHub Actions Secrets。不要把 Vercel 的 Read and Write key 放入每周备份工作流。
 
