@@ -43,6 +43,8 @@ export async function GET(request: Request) {
     const { userId, admin } = await requireUser(request);
     const params = new URL(request.url).searchParams;
     const status = params.get("status") ?? "open";
+    if (![params.get("page") ?? "1", params.get("pageSize") ?? "30"].every(value => Number.isFinite(Number(value))))
+      throw new HttpError(400, "Invalid review pagination");
     const page = Math.max(1, Math.min(100000, Math.floor(Number(params.get("page") ?? 1)) || 1));
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(params.get("pageSize") ?? 30)) || 30));
     const documentId = params.get("documentId");
@@ -78,6 +80,7 @@ export async function GET(request: Request) {
     if (status === "open") query = query.in("status", ["pending", "edited"]);
     else if (status !== "all") query = query.eq("status", status);
     const { data: candidates, count, error } = await query;
+    if (error?.code === "PGRST103") throw new HttpError(400, "审核页码超出范围，请返回上一页");
     if (error) throw error;
     const ids = [...new Set((candidates ?? []).map((item) => item.document_id))];
     let documents: Record<string, unknown>[] = [];

@@ -7,13 +7,16 @@ export async function GET(request: Request) {
   try {
     const { admin } = await requireUser(request);
     const params = new URL(request.url).searchParams;
-    const page = Math.max(1, Math.min(100000, Math.floor(Number(params.get("page")) || 1)));
+    const rawPage = Number(params.get("page") ?? 1);
+    if (!Number.isFinite(rawPage)) throw new HttpError(400, "Invalid word bank page");
+    const page = Math.max(1, Math.min(100000, Math.floor(rawPage) || 1));
     const search = (params.get("search") ?? "").replace(/[%,()]/g, "").slice(0, 100);
     const tag = (params.get("tag") ?? "").slice(0,80);
     let q = admin.from("vocabulary_templates").select("id,term,definition,example,tags,part_of_speech,pronunciation,pronunciation_uk,pronunciation_us", { count: "exact" }).eq("approved", true).order("term").order("id").range((page - 1) * 50, page * 50 - 1);
     if (search) q = q.ilike("term", `%${search}%`);
     if (tag) q = q.contains("tags",[tag]);
     const result = await q;
+    if (result.error?.code === "PGRST103") throw new HttpError(400, "词库页码超出范围，请返回上一页");
     if (result.error) throw result.error;
     return NextResponse.json({ words: result.data, count: result.count, page });
   } catch (error) { return apiError(error); }
