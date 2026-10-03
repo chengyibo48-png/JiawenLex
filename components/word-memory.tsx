@@ -59,7 +59,26 @@ export function WordMemory({ data, actions, manager, initialMode = "cards", tool
   useEffect(()=>{ if (!window.speechSynthesis) return; const sync=()=>setVoices(window.speechSynthesis.getVoices()); sync(); window.speechSynthesis.addEventListener("voiceschanged",sync); return ()=>{window.speechSynthesis.cancel();window.speechSynthesis.removeEventListener("voiceschanged",sync);}; },[]);
   useEffect(()=>{window.speechSynthesis?.cancel();setRevealed(false);setIntent(null);setError("");reviewEvent.current=null;},[current?.id,mode,tag]);
   useEffect(()=>{setPage(1);setOpened([]);},[search,tag,mode]);
-  useEffect(()=>{ if (!actions.client || (mode!=="bank" && mode!=="reports")) return; let active=true; const path=mode==="bank"?`/api/word-bank?page=${page}&search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}`:"/api/word-reports"; setError("");setListLoading(true);if(mode==="bank")setBank([]);else setReports([]); void apiFetch(actions.client,path).then(value=>{if(!active)return;const v=value as {words:VocabularyWord[];count:number;reports:typeof reports};if(mode==="bank"){setBank(v.words);setBankCount(v.count);}else setReports(v.reports);}).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setListLoading(false);});return()=>{active=false;};},[actions.client,mode,page,search,tag]);
+  useEffect(() => {
+    const client = actions.client;
+    if (!client || (mode !== "bank" && mode !== "reports")) return;
+    let active = true;
+    const controller = new AbortController();
+    const path = mode === "bank" ? `/api/word-bank?page=${page}&search=${encodeURIComponent(search)}&tag=${encodeURIComponent(tag)}` : "/api/word-reports";
+    setError(""); setListLoading(true);
+    if (mode === "bank") { setBank([]); setBankCount(0); } else setReports([]);
+    const timer = window.setTimeout(() => {
+      void apiFetch(client, path, { signal: controller.signal }).then(value => {
+        if (!active) return;
+        const result = value as { words: VocabularyWord[]; count: number; reports: typeof reports };
+        if (mode === "bank") { setBank(result.words); setBankCount(result.count); }
+        else setReports(result.reports);
+      }).catch(error => { if (active) setError(error.message); })
+        .finally(() => { if (active) setListLoading(false); });
+    }, mode === "bank" && search ? 250 : 0);
+    return () => { active = false; window.clearTimeout(timer); controller.abort(); };
+  }, [actions.client, mode, page, search, tag]);
+
   function pronounce(text:string,accent:"en-GB"|"en-US") { const voice=voices.find(v=>v.lang.toLowerCase()===accent.toLowerCase());if(!voice){actions.notify(t(lang,"设备没有对应口音语音","No device voice for this accent"));return;} window.speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(text);utterance.voice=voice;utterance.lang=accent;utterance.onerror=()=>actions.notify(t(lang,"朗读失败，请重试","Playback failed; retry"));window.speechSynthesis.speak(utterance); }
   function audio(word:VocabularyWord) {return <div className="word-pronunciation">{(["en-GB","en-US"] as const).map(accent=><button type="button" className="button secondary small" key={accent} disabled={!voices.some(v=>v.lang.toLowerCase()===accent.toLowerCase())} onClick={()=>pronounce(word.term,accent)}><Volume2 size={15}/>{accent==="en-GB"?"UK":"US"}{accent==="en-GB"?word.pronunciation_uk:word.pronunciation_us}</button>)}<small>{t(lang,"设备朗读 · 缺少口音时不可用","Device voice · unavailable accents disabled")}</small></div>;}
   async function confirm(known:boolean) {

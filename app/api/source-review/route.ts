@@ -43,8 +43,8 @@ export async function GET(request: Request) {
     const { userId, admin } = await requireUser(request);
     const params = new URL(request.url).searchParams;
     const status = params.get("status") ?? "open";
-    const page = Math.max(1, Math.min(100000, Number(params.get("page") ?? 1) || 1));
-    const pageSize = Math.max(1, Math.min(100, Number(params.get("pageSize") ?? 30) || 30));
+    const page = Math.max(1, Math.min(100000, Math.floor(Number(params.get("page") ?? 1)) || 1));
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(params.get("pageSize") ?? 30)) || 30));
     const documentId = params.get("documentId");
     const skill = params.get("skill");
     const kind = params.get("kind");
@@ -63,7 +63,7 @@ export async function GET(request: Request) {
       const current = await admin.from("source_page_audit").select("status,note").eq("document_id", pageAuditDocumentId).eq("owner_id", userId).eq("physical_page", requestedPage).maybeSingle();
       if (current.error) throw current.error;
       return NextResponse.json({ totalPages: document.data.page_count, extracted: counts[0].count ?? 0,
-        nonExercise: counts[1].count ?? 0, pending: counts[2].count ?? 0, current: current.data ?? { status: "pending", note: "" } });
+        nonExercise: counts[1].count ?? 0, pending: Math.max(0, (document.data.page_count ?? 0) - (counts[0].count ?? 0) - (counts[1].count ?? 0)), current: current.data ?? { status: "pending", note: "" } });
     }
     if (documentId && !z.string().uuid().safeParse(documentId).success) throw new HttpError(400, "Invalid source document");
     if (skill && !["reading", "listening", "writing", "speaking"].includes(skill)) throw new HttpError(400, "Invalid skill");

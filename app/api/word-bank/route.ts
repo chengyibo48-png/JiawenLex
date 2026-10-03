@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     const { admin } = await requireUser(request);
     const params = new URL(request.url).searchParams;
-    const page = Math.max(1, Math.floor(Number(params.get("page")) || 1));
+    const page = Math.max(1, Math.min(100000, Math.floor(Number(params.get("page")) || 1)));
     const search = (params.get("search") ?? "").replace(/[%,()]/g, "").slice(0, 100);
     const tag = (params.get("tag") ?? "").slice(0,80);
     let q = admin.from("vocabulary_templates").select("id,term,definition,example,tags,part_of_speech,pronunciation,pronunciation_uk,pronunciation_us", { count: "exact" }).eq("approved", true).order("term").order("id").range((page - 1) * 50, page * 50 - 1);

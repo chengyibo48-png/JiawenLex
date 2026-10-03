@@ -4,6 +4,8 @@ import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
 import { SOURCE_MAX_FILE_BYTES, SOURCE_PART_BYTES, sourceStorage, usedSourceBytes } from "@/lib/source-storage";
 
+export const maxDuration = 60;
+
 const UploadInput = z.object({
   title: z.string().trim().min(1).max(500),
   originalName: z.string().trim().min(1).max(500).regex(/\.pdf$/i),
@@ -85,9 +87,13 @@ export async function GET(request: Request) {
     const { userId, admin } = await requireUser(request);
     const { data, error } = await admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,skill_tags,content_kind,source_url,license_name,rights_attestation,parse_status,parsed_pages,status,created_at,members_visible").or(`owner_id.eq.${userId},members_visible.eq.true`).order("created_at", { ascending: false }).limit(500);
     if (error) throw error;
-    const storage = sourceStorage();
-    const usedBytes = await usedSourceBytes(storage.client, storage.bucket);
-    return NextResponse.json({ documents: (data ?? []).map(({ owner_id, ...document }) => ({ ...document, canManageSharing: owner_id === userId })), capacity: { usedBytes, maxBytes: storage.maxBytes, maxFileBytes: SOURCE_MAX_FILE_BYTES } });
+    let capacity = null;
+    if (new URL(request.url).searchParams.get("includeCapacity") !== "false") {
+      const storage = sourceStorage();
+      const usedBytes = await usedSourceBytes(storage.client, storage.bucket);
+      capacity = { usedBytes, maxBytes: storage.maxBytes, maxFileBytes: SOURCE_MAX_FILE_BYTES };
+    }
+    return NextResponse.json({ documents: (data ?? []).map(({ owner_id, ...document }) => ({ ...document, canManageSharing: owner_id === userId })), capacity }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return apiError(error); }
 }
 
