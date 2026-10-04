@@ -730,3 +730,16 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
 .activity-detail article { padding:14px 0; border-bottom:1px solid var(--border); }
 .activity-detail p { white-space:pre-wrap; overflow-wrap:anywhere; }
 @media(max-width:620px) { .activity-heading { align-items:flex-start; flex-direction:column; } .activity-records article { align-items:flex-start; flex-direction:column; } .activity-members { grid-template-columns:1fr; } }
+.speaking-reference { margin-top: 24px; padding: 20px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-soft); }
+.speaking-reference h4 { margin: 0 0 8px; }
+.speaking-reference .audio-player { width: 100%; margin: 12px 0; }
+.speaking-reference .button-row { align-items: end; flex-wrap: wrap; }
+.speaking-reference-text { margin-top: 16px; white-space: pre-wrap; line-height: 1.8; overflow-wrap: anywhere; }
+
+.activity-toolbar { display:flex; align-items:end; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-top:20px; }
+.activity-toolbar label { display:grid; gap:8px; flex:1; max-width:360px; }
+.activity-toolbar input { width:100%; }
+.activity-member.selected { box-shadow:inset 4px 0 0 var(--primary); }
+.activity-checks { padding-left:20px; line-height:1.8; color:var(--muted); }
+.activity-records .button { flex-shrink:0; }
+@media(max-width:620px) { .activity-toolbar label, .activity-filters label { max-width:none; width:100%; } }

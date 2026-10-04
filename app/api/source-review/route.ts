@@ -1,3 +1,4 @@
+import { canonicalAttachmentMime } from "@/lib/file-mime";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, authenticatedDb, HttpError, requireUser } from "@/lib/server-auth";
@@ -205,7 +206,7 @@ export async function PATCH(request: Request) {
       const prefix = value.audioFilePath ? "audio/" : "image/";
       const audio = (listed.data ?? []).find((file) => file.name === audioPath.slice(slash + 1) && String(file.metadata?.mimetype ?? "").startsWith(prefix));
       if (!audio) throw new HttpError(400, "辅助附件未上传或格式无效");
-      attachmentMime = String(audio.metadata?.mimetype);
+      attachmentMime = canonicalAttachmentMime(String(audio.metadata?.mimetype), audio.name);
     }
     const material = {
       id, owner_id: userId, visibility: input.shared ? "shared" : "private", approval: "approved",

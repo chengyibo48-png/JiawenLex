@@ -1,4 +1,6 @@
 "use client";
+import { canonicalAttachmentMime } from "@/lib/file-mime";
+
 import { AdminActivity } from "./admin-activity";
 import { VocabularyCollections } from "./vocabulary-collections";
 import { APP_VERSION } from "@/lib/release";
@@ -811,7 +813,7 @@ export function LibraryView({ data, actions }: Props) {
         filePath = `${data.profile.id}/${id}/${crypto.randomUUID()}-${file.name.replace(/[^\w.\-]/g, "_")}`;
         const { error } = await actions.client.storage
           .from("study-files")
-          .upload(filePath, file, { upsert: false });
+          .upload(filePath, file, { upsert: false, contentType: canonicalAttachmentMime(file.type, file.name) || undefined });
         if (!error) uploadedPath = filePath;
         if (error) {
           actions.notify(error.message);
@@ -850,7 +852,7 @@ export function LibraryView({ data, actions }: Props) {
         license_name: newMaterial.license_name?.trim() ?? "",
         file_path: filePath,
         file_name: file?.name ?? newMaterial.file_name ?? null,
-        file_kind: file?.type ?? newMaterial.file_kind ?? null,
+        file_kind: file ? canonicalAttachmentMime(file.type, file.name) : newMaterial.file_kind ?? null,
         created_at: newMaterial.created_at ?? new Date().toISOString(),
       };
       await actions.upsert("materials", "materials", material);

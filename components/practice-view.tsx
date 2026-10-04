@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { MicroTrainingView } from "./micro-training-view";
 import { ResponsePrompt } from "./response-prompt";
+import { SpeakingReference } from "./speaking-reference";
 import { IntensiveListening } from "./intensive-listening";
 import { PracticeCatalog } from "./practice-catalog";
 import { QuestionPractice } from "./question-practice";
@@ -1539,6 +1540,7 @@ export function PracticeView({
                   finished={finished}
                   figureUrl={figureUrl}
                 />
+                {selected.file_path && selected.file_kind?.startsWith("audio/") && <SpeakingReference key={selected.id} url={audioUrl} transcript={selected.transcript} lang={lang} loading={!audioError && !audioUrl} onRetry={() => setAudioReload(value => value + 1)} />}
               </section>
               <section className="card recording-card">
                 <h3>{t(lang, "录下你的回答", "Record your answer")}</h3>

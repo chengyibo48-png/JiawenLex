@@ -76,8 +76,8 @@ export function MicroTrainingView({
           <p>
             {t(
               lang,
-              "先做一个短任务，再核对表达或自评。已发布的口语 Part 1 和翻译资料可以直接做短训练；原题保留来源，自编内容明确标注。",
-              "Complete a short task, then review its expression or self-check. Published Part 1 and translation materials are available as short exercises with clear sources.",
+              "先做一个短任务，再核对表达或自评。已发布的口语 Part 1、翻译及写作观点资料可以直接做短训练；原题保留来源，自编内容明确标注。",
+              "Complete a short task, then review its expression or self-check. Published Part 1, translation and writing idea materials are available as short exercises with clear sources.",
             )}
           </p>
         </div>

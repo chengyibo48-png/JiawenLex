@@ -8,7 +8,7 @@ interface ActivityDbRow {
   correct_count?: number | null; correct?: number | null; question_count?: number | null; item_count?: number | null; total?: number | null; duration_seconds?: number | null;
   answer_body?: unknown; transcript?: unknown; unit_snapshot?: unknown; self_review?: unknown;
 }
-const querySchema = z.object({ member: z.string().uuid().optional(), module: z.enum(activityModules).default("reading"), page: z.coerce.number().int().min(1).max(100000).default(1), record: z.string().uuid().optional() });
+const querySchema = z.object({ member: z.string().uuid().optional(), module: z.enum(activityModules).default("reading"), page: z.coerce.number().int().min(1).max(100000).default(1), days: z.coerce.number().pipe(z.union([z.literal(0), z.literal(7), z.literal(30), z.literal(90), z.literal(365)])).default(0), record: z.string().uuid().optional() });
 export async function GET(request: Request) {
   try {
     const { profile, admin } = await requireUser(request);
@@ -52,6 +52,7 @@ export async function GET(request: Request) {
     const columns = objective ? "id,material_id,skill,mode,duration_seconds,correct_count,question_count,submitted_at,purged_at" : query.module === "micro" ? "id,unit_title,skill,kind,duration_seconds,correct_count,item_count,submitted_at,purged_at" : query.module === "vocabulary" ? "event_id,word_id,known,created_at" : query.module === "spelling" ? "id,total,correct,created_at" : "id,title,skill,status,minutes,planned_date,created_at";
     let recordsQuery = admin.from(table).select(query.record ? columns + (objective ? ",answer_body,transcript" : query.module === "micro" ? ",answer_body,unit_snapshot,self_review" : query.module === "spelling" ? ",wrong_word_ids" : "") : columns, { count: "exact" }).eq("owner_id", query.member);
     if (objective) recordsQuery = recordsQuery.eq("skill", query.module);
+    if (!query.record && query.days) recordsQuery = recordsQuery.gte(time, new Date(Date.now() - query.days * 86400000).toISOString());
     if (query.record) recordsQuery = recordsQuery.eq(query.module === "vocabulary" ? "event_id" : "id", query.record);
     const { data: records, count, error } = await recordsQuery.order(time, { ascending: false }).order(query.module === "vocabulary" ? "event_id" : "id", { ascending: false }).range(query.record ? 0 : (query.page - 1) * 25, query.record ? 0 : query.page * 25 - 1).returns<ActivityDbRow[]>();
     if (error) throw error;
@@ -70,7 +71,16 @@ export async function GET(request: Request) {
         questions = Array.isArray(snapshot.items) ? snapshot.items : [];
       }
       if (record.purged_at) { delete record.answer_body; delete record.transcript; delete record.unit_snapshot; delete record.self_review; }
-      return NextResponse.json({ record, questions }, { headers });
+      let wrongWords: { id: string; term: string }[] = [];
+      if (query.module === "spelling") {
+        const ids = (record as ActivityDbRow & { wrong_word_ids?: string[] }).wrong_word_ids;
+        if (Array.isArray(ids) && ids.length) {
+          const result = await admin.from("vocabulary").select("id,term").eq("owner_id", query.member).in("id", ids);
+          if (result.error) throw result.error;
+          wrongWords = result.data ?? [];
+        }
+      }
+      return NextResponse.json({ record, questions, wrongWords }, { headers });
     }
     const materialIds = [...new Set((records ?? []).map(r => r.material_id).filter(Boolean))];
     const wordIds = [...new Set((records ?? []).map(r => r.word_id).filter(Boolean))];

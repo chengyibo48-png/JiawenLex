@@ -1,3 +1,4 @@
+import { canonicalAttachmentMime } from "@/lib/file-mime";
 import { accessibleMaterial, parseFileToken } from "@/lib/file-access";
 import { apiError, HttpError } from "@/lib/server-auth";
 
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
     const upstream = await fetch(data.signedUrl, { headers: range ? { Range: range } : undefined, signal: AbortSignal.timeout(30000) });
     if (!upstream.ok && upstream.status !== 206) throw new HttpError(502, "Attachment could not be loaded");
     const headers = new Headers({ "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Referrer-Policy": "no-referrer" });
-    const kind = material.file_kind ?? "application/octet-stream";
+    const kind = canonicalAttachmentMime(material.file_kind, material.file_path?.split("/").at(-1) ?? "") || "application/octet-stream";
     const safeKind = /^(audio\/(mpeg|mp4|webm|wav|ogg)|image\/(png|jpeg|webp)|application\/pdf|text\/plain)$/.test(kind) ? kind : "application/octet-stream";
     headers.set("Content-Type", safeKind);
     headers.set("Content-Disposition", safeKind === "application/octet-stream" ? "attachment" : "inline");

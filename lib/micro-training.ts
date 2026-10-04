@@ -349,6 +349,8 @@ export function materialUnit(m: Material): MicroUnit | null {
     return null;
   const items = m.questions.map((q) => ({
     id: q.id,
+    origin: q.origin_kind,
+    sourcePage: q.source_physical_page,
     prompt: q.prompt,
     context: m.passage || m.prompt,
     choices: (q.choices ?? []).map((v) => v.trim()).filter(Boolean),
@@ -379,6 +381,8 @@ export function materialUnit(m: Material): MicroUnit | null {
     skill: m.skill,
     title: m.title,
     description: m.prompt,
+    origin: m.origin_kind,
+    sourceVerified: m.questions.every(q => q.verified === true),
     minutes: m.training_minutes ?? 5,
     topics: m.training_topics ?? [],
     source: m.source_title,
@@ -389,10 +393,11 @@ export function materialUnit(m: Material): MicroUnit | null {
 function sourceMicroUnit(m: Material): MicroUnit | null {
   const speaking=m.skill==="speaking"&&/part\s*1/i.test(m.question_type);
   const translation=m.skill==="writing"&&m.question_type==="Translation";
-  if((!speaking&&!translation)||!m.source_title.trim()||!m.license_name.trim()||!m.questions?.length||m.questions.length>5||m.questions.some(q=>q.answer_mode!=="open"||!q.prompt.trim()||!q.source_refs?.length))return null;
-  const items=m.questions.map(q=>({id:q.id,sourcePage:q.source_physical_page,origin:q.origin_kind,prompt:q.prompt,context:translation?"将原句译成自然英文，保留限定词和逻辑关系。":"请先开口回答，再记录回答或笔记。",choices:[],answers:q.reference_answers??[],explanation:q.explanation||"开放回答没有唯一标准答案；按下列标准自评，不生成雅思分数。",checklist:q.checklist?.length?q.checklist:translation?["完整保留原意","语法和句子结构完整","核对参考后记录需要改进之处"]:["直接回应问题","给出相关原因或具体细节","已开口练习"]}));
+  const ideas=m.skill==="writing"&&m.question_type==="Writing Ideas";
+  if((!speaking&&!translation&&!ideas)||!m.source_title.trim()||!m.license_name.trim()||!m.questions?.length||m.questions.length>5||m.questions.some(q=>q.answer_mode!=="open"||!q.prompt.trim()||!q.source_refs?.length))return null;
+  const items=m.questions.map(q=>({id:q.id,sourcePage:q.source_physical_page,origin:q.origin_kind,prompt:q.prompt,context:ideas?(m.passage||"围绕主题用英文表达观点，并给出相关理由或例子。"):translation?"将原句译成自然英文，保留限定词和逻辑关系。":"请先开口回答，再记录回答或笔记。",choices:[],answers:q.reference_answers??[],explanation:q.explanation||"开放回答没有唯一标准答案；按下列标准自评，不生成雅思分数。",checklist:q.checklist?.length?q.checklist:ideas?["观点直接回应主题","理由或例子支持观点","核对语法、词义与表达适用范围"]:translation?["完整保留原意","语法和句子结构完整","核对参考后记录需要改进之处"]:["直接回应问题","给出相关原因或具体细节","已开口练习"]}));
   if(translation&&items.some(i=>!i.answers.length))return null;
-  return {key:`material:${m.id}`,stamp:`source-micro-1-v${m.revision??1}`,materialId:m.id,kind:speaking?"speaking_part1":"rewrite",skill:m.skill,title:m.title,description:speaking?"资料原题短答：先回答，再自评。":"资料原题翻译：参考表达不是唯一答案。",minutes:speaking?3:5,topics:speaking?["口语","fluency",...m.tags]:["翻译","grammar","语法",...m.tags],source:`${m.source_title} · PDF 第 ${m.source_physical_page??m.questions[0].source_physical_page??"待核对"} 页`,permission:m.license_name,origin:m.origin_kind,sourceVerified:m.questions.every(q=>q.verified===true),items};
+  return {key:`material:${m.id}`,stamp:`source-micro-1-v${m.revision??1}`,materialId:m.id,kind:speaking?"speaking_part1":"rewrite",skill:m.skill,title:m.title,description:speaking?"资料原题短答：先回答，再自评。":ideas?"改编观点训练：用自己的表达组织观点，参考素材不是唯一答案。":"资料原题翻译：参考表达不是唯一答案。",minutes:speaking?3:5,topics:speaking?["口语","fluency",...m.tags]:ideas?["写作观点","coherence",...m.tags]:["翻译","grammar","语法",...m.tags],source:`${m.source_title} · PDF 第 ${m.source_physical_page??m.questions[0].source_physical_page??"待核对"} 页`,permission:m.license_name,origin:m.origin_kind,sourceVerified:m.questions.every(q=>q.verified===true),items};
 }
 const aliases: Record<string, string[]> = {
   grammar: [
