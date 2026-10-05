@@ -26,7 +26,16 @@ export function SpellingPractice({
     [message, setMessage] = useState("");
   const sessionId = useRef(crypto.randomUUID()),
     lock = useRef(false);
+  const answerInput = useRef<HTMLInputElement>(null);
+  const nextButton = useRef<HTMLButtonElement>(null);
+  const summary = useRef<HTMLHeadingElement>(null);
   const current = queue[index];
+  useEffect(() => {
+    if (!queue.length) return;
+    if (done) summary.current?.focus();
+    else if (result !== null) nextButton.current?.focus();
+    else answerInput.current?.focus();
+  }, [queue, index, result, done]);
   useEffect(() => {
     const pending = queue.length > 0 && !saved;
     actions.registerPracticeGuard(
@@ -41,7 +50,7 @@ export function SpellingPractice({
         ),
     );
     const beforeUnload = (e: BeforeUnloadEvent) => {
-      if (pending) e.preventDefault();
+      if (pending) { e.preventDefault(); e.returnValue = ""; }
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => {
@@ -50,6 +59,7 @@ export function SpellingPractice({
     };
   }, [queue.length, saved, lang]);
   function start(list: VocabularyWord[]) {
+    if (lock.current || !list.length) return;
     if (
       queue.length &&
       !saved &&
@@ -73,13 +83,13 @@ export function SpellingPractice({
     setMessage("");
   }
   function check() {
-    if (!current || result !== null) return;
+    if (!current || result !== null || !input.trim()) return;
     const correct = normalizeTerm(input) === normalizeTerm(current.term);
     setResult(correct);
     if (!correct) setWrong((ids) => [...ids, current.id]);
   }
   async function save() {
-    if (lock.current || saved) return;
+    if (lock.current || saved || !done || !queue.length) return;
     lock.current = true;
     setBusy(true);
     try {
@@ -99,7 +109,6 @@ export function SpellingPractice({
           wrongWordIds: wrong,
         }),
       });
-      await actions.refresh();
       setSaved(true);
       setMessage(
         t(
@@ -108,6 +117,8 @@ export function SpellingPractice({
           "Spelling summary saved. Familiarity and review intervals are preserved",
         ),
       );
+      try { await actions.refresh(); }
+      catch { setMessage(t(lang, "拼写统计已保存，但列表刷新失败。请稍后刷新页面，无需再次保存。", "Spelling summary saved, but the list could not refresh. Refresh later; no need to save again.")); }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "保存失败 / Save failed");
     } finally {
@@ -136,7 +147,7 @@ export function SpellingPractice({
             start([...words].sort((a, b) => a.due_at.localeCompare(b.due_at)))
           }
         >
-          {t(lang, "开始 10 词练习", "Practice up to 10 words")}
+          {words.length ? t(lang, `开始 ${Math.min(words.length, 10)} 词练习`, `Practice ${Math.min(words.length, 10)} words`) : t(lang, "暂无可练词汇", "No words to practise")}
         </button>
       </div>
       {!queue.length ? (
@@ -157,7 +168,7 @@ export function SpellingPractice({
         </p>
       ) : done ? (
         <div className="spelling-summary">
-          <h4>
+          <h4 ref={summary} tabIndex={-1}>
             {t(lang, "本轮总结", "Session summary")}:{" "}
             {queue.length - wrong.length}/{queue.length}
           </h4>
@@ -180,7 +191,7 @@ export function SpellingPractice({
               disabled={busy || saved}
               onClick={() => void save()}
             >
-              {saved
+              {busy ? t(lang, "保存中…", "Saving…") : saved
                 ? t(lang, "统计已保存", "Summary saved")
                 : t(lang, "保存拼写统计", "Save spelling summary")}
             </button>
@@ -219,6 +230,7 @@ export function SpellingPractice({
           <label>
             {t(lang, "拼写答案", "Spell the word")}
             <input
+              ref={answerInput}
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="none"
@@ -248,6 +260,7 @@ export function SpellingPractice({
                   : t(lang, "正确拼写：", "Correct spelling: ") + current.term}
               </p>
               <button
+                ref={nextButton}
                 type="button"
                 className="button secondary"
                 onClick={() => {

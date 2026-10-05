@@ -511,7 +511,9 @@ input[type="checkbox"] { accent-color: #16695e; width: 18px; height: 18px; }
 
 .workspace-dialog { border: 0; padding: 0; margin: auto; background: transparent; color: var(--ink); width: min(660px, calc(100% - 24px)); max-width: none; max-height: 90dvh; overflow: visible; }
 .workspace-dialog::backdrop { background: rgba(9, 25, 21, .48); }
-.workspace-dialog .modal-card { width: 100%; max-height: 90dvh; }
+.workspace-dialog .modal-card { width: 100%; max-height: 90dvh; overscroll-behavior: contain; }
+.answer-question { scroll-margin-block: 24px; }
+.answer-question:focus-visible, .spelling-summary h4:focus-visible { outline: 3px solid #7bbcaf; outline-offset: 3px; }
 .annotated-response { margin-top: 24px; }
 .annotation-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .annotated-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.85; padding: 18px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 10px; }

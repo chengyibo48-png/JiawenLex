@@ -71,6 +71,10 @@ export function IntensiveListening({
     };
   }, []);
   const guard = async () => {
+    if (lock.current) {
+      setMessage(t(lang, "正在保存精听记录，请稍候再离开。", "Saving listening completion. Please wait before leaving."));
+      return false;
+    }
     audio.current?.pause();
     settle();
     return (
@@ -112,11 +116,11 @@ export function IntensiveListening({
       const target = e.target as HTMLElement | null;
       if (
         target?.isContentEditable ||
-        target?.closest("input,textarea,select,button,a,[role='dialog']")
+        target?.closest("input,textarea,select,button,a,audio,summary,dialog,[role='dialog']")
       )
         return;
       const node = audio.current;
-      if (!node || saved) return;
+      if (!node || saved || busy || !Number.isFinite(node.duration)) return;
       if (e.code === "Space") {
         e.preventDefault();
         if (node.paused)
@@ -146,7 +150,7 @@ export function IntensiveListening({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [shortcuts, saved, lang]);
+  }, [shortcuts, saved, busy, lang]);
   async function finish() {
     if (lock.current || saved) return;
     audio.current?.pause();
@@ -185,7 +189,6 @@ export function IntensiveListening({
           answerExposed: everTranscript.current,
         }),
       });
-      await actions.refresh();
       setSaved(true);
       setMessage(
         t(
@@ -194,6 +197,8 @@ export function IntensiveListening({
           "Intensive listening saved separately, without an answer accuracy score",
         ),
       );
+      try { await actions.refresh(); }
+      catch { setMessage(t(lang, "精听已记录，但列表刷新失败。请稍后刷新页面，无需再次记录。", "Listening completion saved, but the list could not refresh. Refresh later; no need to save again.")); }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "保存失败 / Save failed");
     } finally {
@@ -242,7 +247,7 @@ export function IntensiveListening({
           onSeeking={() => settle(false)}
           onEnded={() => {
             settle(false);
-            if (repeat && validLoop && audio.current && !saved) {
+            if (repeat && validLoop && audio.current && !saved && !busy) {
               audio.current.currentTime = a!;
               void audio.current
                 .play()
@@ -310,6 +315,7 @@ export function IntensiveListening({
           disabled={!duration || saved || busy}
           onClick={() => {
             setA(position);
+            setB(null);
             setSegmentIndex(-1);
             setRepeat(false);
           }}
@@ -349,14 +355,14 @@ export function IntensiveListening({
           <div className="button-row">
             <button
               className="button secondary small"
-              disabled={segmentIndex <= 0 || saved}
+              disabled={segmentIndex <= 0 || saved || busy}
               onClick={() => selectSegment(segmentIndex - 1)}
             >
               {t(lang, "上一段", "Previous segment")}
             </button>
             <button
               className="button secondary small"
-              disabled={segmentIndex >= segments.length - 1 || saved}
+              disabled={segmentIndex >= segments.length - 1 || saved || busy}
               onClick={() => selectSegment(segmentIndex + 1)}
             >
               {t(lang, "下一段", "Next segment")}
@@ -365,7 +371,7 @@ export function IntensiveListening({
           <div className="audio-segments">
             {segments.map((s, i) => (
               <button
-                disabled={saved}
+                disabled={saved || busy}
                 key={s.id}
                 className={`audio-segment ${i === segmentIndex ? "active" : ""}`}
                 onClick={() => selectSegment(i)}

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, Sparkles } from "lucide-react";
 import { answeredCount, practiceMaterials } from "@/lib/practice-sessions";
 import { daysUntil, countDueWords, localDate, skillLabels, skills, startOfWeek } from "@/lib/study";
@@ -13,6 +13,7 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
   const today = localDate(new Date(), profile.timezone);
   const [showAll, setShowAll] = useState(false);
   const [savingTask, setSavingTask] = useState<string | null>(null);
+  const taskLock = useRef(false);
   const pending = tasks.filter((task) => task.owner_id === profile.id && task.planned_date === today && task.status === "todo").sort((a, b) => a.created_at.localeCompare(b.created_at));
   const backlog = tasks.filter((task) => task.owner_id === profile.id && task.planned_date < today && task.status === "todo").sort((a, b) => b.planned_date.localeCompare(a.planned_date));
   const weekly = tasks.filter((task) => task.owner_id === profile.id && task.week_start === startOfWeek(new Date(), profile.timezone) && task.status !== "skipped");
@@ -23,7 +24,9 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
   const material = resume && accessible.find((m) => m.id === resume.material_id);
   const start = (task: StudyTask) => task.question_id && !task.review_attempt_id ? actions.notify(t(lang,"原练习已删除，无法继续此题复盘。", "Original attempt deleted; this review is unavailable.")) : task.review_attempt_id ? actions.openReview(task.review_attempt_id, task.question_id ?? undefined) : task.skill === "vocabulary" ? actions.setView("vocabulary") : actions.openPractice(task.material_id, task.skill);
   async function updateTask(task: StudyTask, patch: Partial<StudyTask>) {
-    if (savingTask || task.status !== "todo") return;
+    if (taskLock.current || task.status !== "todo") return;
+    if (patch.planned_date === task.planned_date && patch.status === undefined) return;
+    taskLock.current = true;
     setSavingTask(task.id);
     try {
       const row = { ...task, ...patch };
@@ -36,7 +39,7 @@ export function TodayView({ data, actions }: { data: WorkspaceData; actions: Vie
       } else await actions.upsert("study_tasks", "tasks", row);
       actions.notify(t(lang, patch.status === "done" ? "任务已完成" : "任务已改期", patch.status === "done" ? "Task completed" : "Task rescheduled"));
     } catch (error) { actions.notify(error instanceof Error ? error.message : t(lang, "任务未保存，请重试", "Task was not saved. Retry.")); }
-    finally { setSavingTask(null); }
+    finally { taskLock.current = false; setSavingTask(null); }
   }
   function taskRow(task: StudyTask) {
     return <div className="task-row" key={task.id}>
