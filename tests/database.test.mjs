@@ -54,7 +54,7 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
       await pg.query("insert into auth.users(id,email,raw_user_meta_data) values ($1,$2,$3)", [id, name + "@example.invalid", JSON.stringify({ invite_code: fixtureInvite, display_name: name })]);
     }
     await t.test("Original archive and correction rows are service API only", async () => {
-      for (const table of ["member_presence", "source_documents", "source_upload_sessions", "source_parse_batches", "source_review_candidates", "source_import_tokens", "question_error_reports"]) {
+      for (const table of ["member_presence", "source_documents", "source_upload_sessions", "source_parse_batches", "source_review_candidates", "source_import_tokens", "question_error_reports", "source_rights_audit"]) {
         const result = await pg.query(
           "select has_table_privilege('anon',$1,'select') as anon_read, has_table_privilege('authenticated',$1,'select') as member_read, has_table_privilege('authenticated',$1,'insert') as member_insert, has_table_privilege('authenticated',$1,'update') as member_update, has_table_privilege('authenticated',$1,'delete') as member_delete",
           ["public." + table],
@@ -63,6 +63,29 @@ test("Local PostgreSQL migration and V1 access controls", async (t) => {
           anon_read: false, member_read: false, member_insert: false, member_update: false, member_delete: false,
         });
       }
+    });
+    await t.test("Rights decisions retain immutable declarations and roll back together with their document", async () => {
+      await pg.exec("begin");
+      try {
+        await pg.query("insert into public.source_documents(id,owner_id,title,original_name,object_key,byte_size,sha256) values($1,$2,'Rights fixture','rights.pdf','rights-fixture',1,repeat('8',64))", [newId, owner]);
+        await pg.query("update public.source_documents set rights_attestation='The owner permits sharing this original with active members.',rights_attested_at=now(),rights_review_status='pending' where id=$1", [newId]);
+        await pg.query("update public.source_documents set rights_review_status='approved',rights_reviewed_by=$2,rights_reviewed_at=now(),rights_review_note='Original declaration approved' where id=$1", [newId, recipient]);
+        await pg.query("update public.source_documents set rights_attestation='The owner submits a revised declaration for a new review.',rights_review_status='pending',rights_reviewed_by=null,rights_review_note='' where id=$1", [newId]);
+        const history = await pg.query("select decision,attestation,actor_id,note from public.source_rights_audit where document_id=$1 order by created_at,id", [newId]);
+        assert.equal(history.rows.length, 3);
+        const approved = history.rows.find(row => row.decision === 'approved');
+        assert.equal(approved.actor_id, recipient);
+        assert.equal(approved.note, 'Original declaration approved');
+        assert.match(approved.attestation, /permits sharing this original/);
+        assert.equal(history.rows.filter(row => row.decision === 'pending').length, 2);
+        await pg.exec("savepoint audit_rollback");
+        await pg.query("update public.source_documents set rights_review_status='rejected',rights_reviewed_by=$2 where id=$1", [newId, recipient]);
+        await pg.exec("rollback to audit_rollback");
+        assert.equal((await pg.query("select count(*)::int as count from public.source_rights_audit where document_id=$1", [newId])).rows[0].count, 3);
+        assert.equal((await pg.query("select rights_review_status from public.source_documents where id=$1", [newId])).rows[0].rights_review_status, 'pending');
+        const privileges = (await pg.query("select has_table_privilege('service_role','public.source_rights_audit','update') as can_update,has_table_privilege('service_role','public.source_rights_audit','delete') as can_delete")).rows[0];
+        assert.deepEqual(privileges, { can_update: false, can_delete: false });
+      } finally { await pg.exec("rollback"); }
     });
     await t.test("Question corrections require the owner and reject stale snapshots", async () => {
       const materialId = "00000000-0000-4000-8000-000000000010";

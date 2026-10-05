@@ -41,9 +41,11 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   try {
-    const { userId, admin } = await requireUser(request);
+    const { userId, admin, profile } = await requireUser(request);
     const params = new URL(request.url).searchParams;
     const status = params.get("status") ?? "open";
+    const scope = params.get("scope") ?? "all";
+    if (!["all", "owned"].includes(scope)) throw new HttpError(400, "Invalid review scope");
     if (![params.get("page") ?? "1", params.get("pageSize") ?? "30"].every(value => Number.isFinite(Number(value))))
       throw new HttpError(400, "Invalid review pagination");
     const page = Math.max(1, Math.min(100000, Math.floor(Number(params.get("page") ?? 1)) || 1));
@@ -55,25 +57,34 @@ export async function GET(request: Request) {
     const pageAuditDocumentId = params.get("pageAuditDocumentId");
     if (pageAuditDocumentId) {
       if (!z.string().uuid().safeParse(pageAuditDocumentId).success) throw new HttpError(400, "Invalid source document");
-      const document = await admin.from("source_documents").select("page_count").eq("id", pageAuditDocumentId).eq("owner_id", userId).maybeSingle();
+      let documentQuery = admin.from("source_documents").select("owner_id,page_count").eq("id", pageAuditDocumentId);
+      if (profile.role !== "admin") documentQuery = documentQuery.eq("owner_id", userId);
+      const document = await documentQuery.maybeSingle();
       if (document.error) throw document.error;
       if (!document.data) throw new HttpError(404, "Source document unavailable");
       const requestedPage = Number(params.get("pageAuditPhysicalPage") ?? 1);
       if (!Number.isInteger(requestedPage) || requestedPage < 1 || requestedPage > (document.data.page_count ?? 0)) throw new HttpError(400, "Invalid source page");
-      const counts = await Promise.all(["extracted", "non_exercise", "pending"].map((state) => admin.from("source_page_audit")
-        .select("physical_page", { count: "exact", head: true }).eq("document_id", pageAuditDocumentId).eq("owner_id", userId).eq("status", state)));
+      const counts = await Promise.all(["extracted", "non_exercise", "pending"].map((state) => {
+        let auditQuery = admin.from("source_page_audit").select("physical_page", { count: "exact", head: true }).eq("document_id", pageAuditDocumentId).eq("status", state);
+        if (profile.role !== "admin") auditQuery = auditQuery.eq("owner_id", userId);
+        return auditQuery;
+      }));
       for (const result of counts) if (result.error) throw result.error;
-      const current = await admin.from("source_page_audit").select("status,note").eq("document_id", pageAuditDocumentId).eq("owner_id", userId).eq("physical_page", requestedPage).maybeSingle();
+      let currentQuery = admin.from("source_page_audit").select("status,note").eq("document_id", pageAuditDocumentId).eq("physical_page", requestedPage);
+      if (profile.role !== "admin") currentQuery = currentQuery.eq("owner_id", userId);
+      const current = await currentQuery.maybeSingle();
       if (current.error) throw current.error;
       return NextResponse.json({ totalPages: document.data.page_count, extracted: counts[0].count ?? 0,
-        nonExercise: counts[1].count ?? 0, pending: Math.max(0, (document.data.page_count ?? 0) - (counts[0].count ?? 0) - (counts[1].count ?? 0)), current: current.data ?? { status: "pending", note: "" } });
+        nonExercise: counts[1].count ?? 0, pending: Math.max(0, (document.data.page_count ?? 0) - (counts[0].count ?? 0) - (counts[1].count ?? 0)), current: current.data ?? { status: "pending", note: "" } }, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (documentId && !z.string().uuid().safeParse(documentId).success) throw new HttpError(400, "Invalid source document");
     if (skill && !["reading", "listening", "writing", "speaking"].includes(skill)) throw new HttpError(400, "Invalid skill");
     if (kind && !["question","vocabulary","note","page_text","reference_answer","figure"].includes(kind)) throw new HttpError(400, "Invalid content kind");
     if (verified && verified !== "true") throw new HttpError(400, "Invalid verification filter");
     if (!(["open", "pending", "edited", "rejected", "published", "all"] as const).includes(status as "open")) throw new HttpError(400, "Invalid review status");
-    let query = admin.from("source_review_candidates").select("*", { count: "exact" }).eq("owner_id", userId).order("created_at", { ascending: true }).order("id", { ascending: true }).range((page - 1) * pageSize, page * pageSize - 1);
+    let query = admin.from("source_review_candidates").select("*", { count: "exact" });
+    if (profile.role !== "admin" || scope === "owned") query = query.eq("owner_id", userId);
+    query = query.order("created_at", { ascending: true }).order("id", { ascending: true }).range((page - 1) * pageSize, page * pageSize - 1);
     if (documentId) query = query.eq("document_id", documentId);
     if (skill) query = query.eq("payload->>skill", skill);
     if (kind) query = query.eq("content_kind", kind);
@@ -86,7 +97,9 @@ export async function GET(request: Request) {
     const ids = [...new Set((candidates ?? []).map((item) => item.document_id))];
     let documents: Record<string, unknown>[] = [];
     if (ids.length) {
-      const result = await admin.from("source_documents").select("id,title,original_name,page_count,skill,content_kind").eq("owner_id", userId).in("id", ids);
+      let documentQuery = admin.from("source_documents").select("id,owner_id,title,original_name,page_count,skill,content_kind").in("id", ids);
+      if (profile.role !== "admin") documentQuery = documentQuery.eq("owner_id", userId);
+      const result = await documentQuery;
       if (result.error) throw result.error;
       documents = result.data ?? [];
     }
@@ -97,7 +110,7 @@ export async function GET(request: Request) {
       if (materials.error) throw materials.error;
       for (const material of materials.data ?? []) revisions.set(material.id, material.revision);
     }
-    return NextResponse.json({ candidates: (candidates ?? []).map(item => ({ ...item, material_revision: revisions.get(item.published_material_id ?? item.id) })), documents, count: count ?? 0, page, pageSize });
+    return NextResponse.json({ candidates: (candidates ?? []).map(item => ({ ...item, material_revision: revisions.get(item.published_material_id ?? item.id) })), documents, count: count ?? 0, page, pageSize }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return apiError(error); }
 }
 
@@ -170,7 +183,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ published: true, vocabularyId: id });
     }
     if (contentKind !== "question") throw new HttpError(400, "Only question candidates can be published as exercises");
-    if (!document.rights_attested_at) throw new HttpError(409, "请先记录上传者的组内发布授权声明");
+    if (input.shared && !document.rights_attested_at) throw new HttpError(409, "组内发布需要上传者的授权声明");
     if (payload.possible_duplicate_of && (payload.duplicate_resolution !== "distinct" || String(payload.duplicate_note ?? "").trim().length < 10)) {
       throw new HttpError(409, "发现相同题干。请先检查已有题目；不同题目需填写 duplicate_resolution=distinct 和至少 10 字的 duplicate_note，同题的不同范文应合并为参考答案变体");
     }

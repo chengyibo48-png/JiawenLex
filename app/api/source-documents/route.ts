@@ -84,8 +84,10 @@ async function createUpload(userId: string, admin: import("@supabase/supabase-js
 
 export async function GET(request: Request) {
   try {
-    const { userId, admin } = await requireUser(request);
-    const { data, error } = await admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,skill_tags,content_kind,source_url,license_name,rights_attestation,parse_status,parsed_pages,status,created_at,members_visible").or(`owner_id.eq.${userId},members_visible.eq.true`).order("created_at", { ascending: false }).limit(500);
+    const { userId, admin, profile } = await requireUser(request);
+    let query = admin.from("source_documents").select("id,owner_id,title,original_name,byte_size,sha256,page_count,source_title,author,source_year,skill,skill_tags,content_kind,source_url,license_name,rights_attestation,rights_attested_at,rights_review_status,rights_reviewed_at,rights_reviewed_by,rights_review_note,parse_status,parsed_pages,status,created_at,members_visible");
+    if (profile.role !== "admin") query = query.or(`owner_id.eq.${userId},members_visible.eq.true`);
+    const { data, error } = await query.order("created_at", { ascending: false }).limit(500);
     if (error) throw error;
     let capacity = null;
     if (new URL(request.url).searchParams.get("includeCapacity") !== "false") {
@@ -93,7 +95,9 @@ export async function GET(request: Request) {
       const usedBytes = await usedSourceBytes(storage.client, storage.bucket);
       capacity = { usedBytes, maxBytes: storage.maxBytes, maxFileBytes: SOURCE_MAX_FILE_BYTES };
     }
-    return NextResponse.json({ documents: (data ?? []).map(({ owner_id, ...document }) => ({ ...document, canManageSharing: owner_id === userId })), capacity }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ documents: (data ?? []).map(({ owner_id, rights_reviewed_by, rights_review_note, rights_reviewed_at, ...document }) => ({ ...document,
+      ...(profile.role === "admin" || owner_id === userId ? { rights_reviewed_by, rights_review_note, rights_reviewed_at } : {}),
+      ...(profile.role === "admin" ? { ownerId: owner_id } : {}), canManageSharing: owner_id === userId })), capacity }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return apiError(error); }
 }
 

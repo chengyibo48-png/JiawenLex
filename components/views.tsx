@@ -995,8 +995,8 @@ export function LibraryView({ data, actions }: Props) {
           {tab === "practice" ? t(lang, "练习题库", "Practice bank") : tab === "originals" ? t(lang, "原始资料", "Original archive") : tab === "review" ? t(lang, "识别审核", "Recognition review") : t(lang, "题目纠错", "Question corrections")}
         </button>)}
       </div>
-      {libraryTab === "originals" && <SourceLibraryPanel mode="originals" client={actions.client} lang={lang} notify={actions.notify} />}
-      {libraryTab === "review" && <SourceLibraryPanel mode="review" isAdmin={data.profile.role === "admin"} client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "originals" && <SourceLibraryPanel mode="originals" isAdmin={data.profile.role === "admin"} currentUserId={data.profile.id} client={actions.client} lang={lang} notify={actions.notify} />}
+      {libraryTab === "review" && <SourceLibraryPanel mode="review" isAdmin={data.profile.role === "admin"} currentUserId={data.profile.id} client={actions.client} lang={lang} notify={actions.notify} />}
       {libraryTab === "corrections" && <QuestionCorrections client={actions.client} lang={lang} notify={actions.notify} />}
       {libraryTab === "practice" && creating && (
         <section className="card editor-card">
