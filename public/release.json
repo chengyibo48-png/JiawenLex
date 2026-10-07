@@ -1,12 +1,14 @@
 {
-  "release": "2026-09-29-phases-1-3",
+  "release": "2026-10-07-v1.5.0",
   "brandVersion": "08786b3988a2",
   "features": [
     "practice-sessions",
     "review-learning",
     "micro-training",
-    "material-versions"
+    "material-versions",
+    "learning-workbench",
+    "consistent-save-feedback"
   ],
-  "version": "1.4.1",
-  "releasedAt": "2026-10-05"
+  "version": "1.5.0",
+  "releasedAt": "2026-10-07"
 }

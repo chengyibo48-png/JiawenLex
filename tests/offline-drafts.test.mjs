@@ -4,6 +4,13 @@ import { IDBFactory } from "fake-indexeddb";
 import { archiveLocalDraft, clearLocalDraft, clearUserDrafts, conflictCopies, localDraftIds, readLocalDraft, saveLocalDraft } from "../lib/offline-drafts.ts";
 
 function freshDatabase() { globalThis.indexedDB = new IDBFactory(); }
+test("Failed local storage rejects the write and retry preserves the intended content", async () => {
+  globalThis.indexedDB = { open() { throw new Error("Local storage unavailable"); } };
+  await assert.rejects(saveLocalDraft("storage-test", "answer", "Pending answer", 1), /Local storage unavailable/);
+  freshDatabase();
+  await saveLocalDraft("storage-test", "answer", "Pending answer", 1);
+  assert.equal((await readLocalDraft("storage-test", "answer")).body, "Pending answer");
+});
 test("Deleting an account clears its local drafts and conflict copies only", async () => {
   freshDatabase();
   await saveLocalDraft("owner", "essay", "Private draft", 1);

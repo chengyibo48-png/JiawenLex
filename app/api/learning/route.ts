@@ -16,6 +16,13 @@ const Input = z.object({
   flagged: z.array(z.string().max(100)).max(200).default([]),
   answerExposed: z.boolean().default(false),
 });
+async function attemptResponse(admin: Awaited<ReturnType<typeof requireUser>>["admin"], id: string, userId: string) {
+  try {
+    const attempt = await admin.from("practice_attempts").select("*").eq("id", id).eq("owner_id", userId).single();
+    const review = await admin.from("attempt_reviews").select("*").eq("id", id).eq("owner_id", userId).maybeSingle();
+    return NextResponse.json({ id, attempt: attempt.data, review: review.data, refreshRequired: !!(attempt.error || review.error) });
+  } catch { return NextResponse.json({ id, attempt: null, review: null, refreshRequired: true }); }
+}
 export async function POST(request: Request) {
   try {
     const { userId, admin } = await requireUser(request);
@@ -33,7 +40,7 @@ export async function POST(request: Request) {
     if (prior.data) {
       if (prior.data.material_id !== input.materialId)
         throw new HttpError(409, "Attempt ID already used");
-      return NextResponse.json({ id: prior.data.id });
+      return attemptResponse(admin, prior.data.id, userId);
     }
     const { data, error } = await admin
       .from("materials")
@@ -117,7 +124,7 @@ export async function POST(request: Request) {
       expected_snapshot: snapshotMaterial(m),
     });
     if (saved.error) throw new HttpError(409, saved.error.message);
-    return NextResponse.json({ id: saved.data });
+    return attemptResponse(admin, saved.data, userId);
   } catch (error) {
     return apiError(error);
   }

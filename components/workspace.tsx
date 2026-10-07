@@ -82,6 +82,7 @@ export function Workspace() {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("today");
+  const [vocabularyReviewRequest, setVocabularyReviewRequest] = useState<string>();
   const [microTarget, setMicroTarget] =
     useState<ViewActions["microTarget"]>(null);
   const [reviewTarget, setReviewTarget] = useState<{
@@ -111,6 +112,8 @@ export function Workspace() {
   const authGeneration = useRef(0);
   const wordEdits = useRef(new Map<string, VocabularyWord>());
   const taskEdits = useRef(new Map<string, StudyTask>());
+  const reviewEdits = useRef(new Map<string, import("@/lib/review").AttemptReview>());
+  const attemptEdits = useRef(new Map<string, import("@/lib/types").Attempt>());
   const demoQuotaWarned = useRef(false);
   const logoutChecking = useRef(false);
   const logoutSubmitting = useRef(false);
@@ -123,6 +126,7 @@ export function Workspace() {
 
   useEffect(() => () => { if (toastTimer.current !== null) window.clearTimeout(toastTimer.current); }, []);
 
+  const refreshFailure = useRef<Error | null>(null);
   const refresh = useCallback((): Promise<void> => {
     if (demoMode || !client) return Promise.resolve();
     refreshPending.current = true;
@@ -133,6 +137,10 @@ export function Workspace() {
         const generation = authGeneration.current;
         const confirmedTasks = new Map<string, StudyTask>();
         taskEdits.current = confirmedTasks;
+        const confirmedReviews = new Map<string, import("@/lib/review").AttemptReview>();
+        const confirmedAttempts = new Map<string, import("@/lib/types").Attempt>();
+        reviewEdits.current = confirmedReviews; attemptEdits.current = confirmedAttempts;
+        refreshFailure.current = null;
         try {
           const { data: auth, error: authError } = await client.auth.getUser();
           if (generation !== authGeneration.current) continue;
@@ -142,11 +150,14 @@ export function Workspace() {
           const workspace = await loadWorkspace(client, auth.user.id, { includeWords: false });
           if (generation !== authGeneration.current) continue;
           workspace.tasks = mergeConfirmedRows(workspace.tasks, confirmedTasks, auth.user.id);
+          workspace.attemptReviews = mergeConfirmedRows(workspace.attemptReviews ?? [], confirmedReviews, auth.user.id);
+          workspace.attempts = mergeConfirmedRows(workspace.attempts, confirmedAttempts, auth.user.id);
           setData(previous => previous?.profile.id === auth.user!.id
             ? { ...workspace, words: previous.words, wordsLoaded: previous.wordsLoaded }
             : workspace);
         } catch (error) {
           if (generation !== authGeneration.current) continue;
+          refreshFailure.current = error instanceof Error ? error : new Error("刷新失败 / Refresh failed");
           if (error instanceof Error && error.message === "账号已停用或个人资料尚未建立") setData(null);
           notify(error instanceof Error ? error.message : "加载失败");
         } finally { setLoading(false); }
@@ -478,19 +489,29 @@ export function Workspace() {
     updateProfile,
     replacePlan,
     notify,
-    refresh: async () => { await refresh(); },
+    refresh: async () => { await refresh(); if (refreshFailure.current) throw refreshFailure.current; },
     acceptTask: (task) => {
       taskEdits.current.set(task.id, task);
       setData(previous => previous?.profile.id === task.owner_id ? {
-        ...previous, tasks: previous.tasks.map(existing => existing.id === task.id ? task : existing),
+        ...previous, tasks: [...previous.tasks.filter(existing => existing.id !== task.id), task],
       } : previous);
     },
-    acceptWord: (word) => {
+    acceptWord: (word, options) => {
       wordEdits.current.set(word.id, word);
       setData(previous => previous?.profile.id === word.owner_id ? {
-        ...previous, words: previous.words.map(existing => existing.id === word.id ? word : existing),
+        ...previous, words: [...previous.words.filter(existing => existing.id !== word.id), word],
+        wordDueCount: previous.wordsLoaded === false && options?.newlyAdded && !previous.words.some(existing=>existing.id===word.id) && Date.parse(word.due_at)<=Date.now() ? (previous.wordDueCount ?? 0)+1 : previous.wordDueCount,
       } : previous);
     },
+    acceptAttempt: (attempt) => { attemptEdits.current.set(attempt.id, attempt); setData(previous => previous?.profile.id === attempt.owner_id ? {
+      ...previous, attempts: [...previous.attempts.filter(row => row.id !== attempt.id), attempt],
+    } : previous); },
+    acceptReview: (review) => { reviewEdits.current.set(review.id, review); setData(previous => previous?.profile.id === review.owner_id ? {
+      ...previous, attemptReviews: [...(previous.attemptReviews ?? []).filter(row => row.id !== review.id), review],
+    } : previous); },
+    acceptVocabularySource: (source) => setData(previous => previous?.profile.id === source.owner_id ? {
+      ...previous, vocabularySources: [...(previous.vocabularySources ?? []).filter(row => row.id !== source.id), source],
+    } : previous),
     microTarget,
     clearMicroTarget: () => setMicroTarget(null),
     openMicroTraining: (topic, unitKey) =>
@@ -527,6 +548,8 @@ export function Workspace() {
         }
         setPracticeSkill(skill ?? "reading");
       }),
+    vocabularyReviewRequest,
+    openVocabularyReview: () => navigate("vocabulary", () => setVocabularyReviewRequest(crypto.randomUUID())),
     reviewTarget,
     clearReviewTarget: () => setReviewTarget(null),
     openReview: (attemptId, questionId) =>

@@ -233,6 +233,9 @@ export async function deleteRow(
   if (error) throw error;
 }
 
+export { ApiError } from "./api-error";
+import { ApiError } from "./api-error";
+
 export async function apiFetch(
   client: SupabaseClient | null,
   path: string,
@@ -250,7 +253,8 @@ export async function apiFetch(
       ...(init?.headers ?? {}),
     },
   });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error ?? "请求失败");
+  const parsed = await response.json().catch(() => ({}));
+  const body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  if (!response.ok) throw new ApiError(response.status, body);
   return body;
 }

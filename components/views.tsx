@@ -1,5 +1,7 @@
 "use client";
 import { canonicalAttachmentMime } from "@/lib/file-mime";
+import { nextCalendarDate } from "@/lib/learning-flow";
+import { practiceMaterials } from "@/lib/practice-sessions";
 
 import { AdminActivity } from "./admin-activity";
 import { VocabularyCollections } from "./vocabulary-collections";
@@ -107,8 +109,13 @@ export interface ViewActions {
     materialId?: string | null,
   ) => void;
   acceptDraft: (draft: WritingDraft) => void;
-  acceptWord?: (word: VocabularyWord) => void;
+  acceptWord?: (word: VocabularyWord, options?: { newlyAdded?: boolean }) => void;
   acceptTask?: (task: StudyTask) => void;
+  acceptReview?: (review: import("@/lib/review").AttemptReview) => void;
+  acceptAttempt?: (attempt: Attempt) => void;
+  acceptVocabularySource?: (source: import("@/lib/review").VocabularySource) => void;
+  vocabularyReviewRequest?: string;
+  openVocabularyReview?: () => void;
 }
 
 type Props = { data: WorkspaceData; actions: ViewActions };
@@ -411,6 +418,19 @@ function VocabularyManagerView({ data, actions }: Props) {
 }
 
 export function PlanView({ data, actions }: Props) {
+  const [planError, setPlanError] = useState("");
+  function startTask(task: StudyTask) {
+    if (task.question_id && !task.review_attempt_id || task.review_attempt_id && !data.attempts.some(row=>row.id===task.review_attempt_id && row.owner_id===data.profile.id && !row.purged_at)) {
+      setPlanError(t(data.profile.language,"原练习已删除、清理或不可访问。请调整任务或返回今天。","Original attempt deleted, purged or inaccessible. Adjust this task or return to Today.")); return;
+    }
+    if (task.material_id && !task.review_attempt_id && !practiceMaterials(data).some(row=>row.id===task.material_id)) {
+      setPlanError(t(data.profile.language,"资料已删除或无访问权限。可以到资料库选择其他练习。","Material deleted or inaccessible. Choose another set in Library.")); return;
+    }
+    setPlanError("");
+    if(task.review_attempt_id)actions.openReview(task.review_attempt_id,task.question_id??undefined);
+    else if(task.skill==="vocabulary") (actions.openVocabularyReview ?? (()=>actions.setView("vocabulary")))();
+    else actions.openPractice(task.material_id,task.skill);
+  }
   const lang = data.profile.language;
   const week = startOfWeek(new Date(), data.profile.timezone);
   const current = data.tasks
@@ -438,13 +458,18 @@ export function PlanView({ data, actions }: Props) {
           if (!result.data?.length) actions.notify(t(lang, "任务已在其他页面变化，请查看最新状态。", "This task changed elsewhere. Check its latest status."));
         }
       } else await actions.upsert("study_tasks", "tasks", { ...task, ...patch });
-    } catch (error) { actions.notify(error instanceof Error ? error.message : t(lang, "任务未保存，请重试。", "Task was not saved. Retry.")); }
+    } catch (error) { setPlanError(error instanceof Error ? error.message : t(lang, "任务未保存，请重试。", "Task was not saved. Retry.")); }
     finally { taskLock.current = false; setSavingTask(null); }
   }
 
   async function addTask(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim() || taskLock.current || planBusy) return;
+    try { nextCalendarDate(plannedDate,0); } catch { setPlanError(t(lang,"请选择有效的日历日期","Choose a valid calendar date")); return; }
+    const targetWeek = startOfWeek(new Date(plannedDate + "T12:00:00"));
+    const plannedMinutes = data.tasks.filter(task=>task.owner_id===data.profile.id && task.week_start===targetWeek && task.status!=="skipped").reduce((sum,task)=>sum+task.minutes,0);
+    if (plannedMinutes + minutes > data.profile.weekly_hours * 60) { setPlanError(t(lang,"这一周预算不足，输入已保留。请在下方日期框改期，或先调整已有任务。","Weekly budget exceeded. Input retained; change the date below or adjust existing tasks.")); return; }
+    setPlanError("");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedDate) || !Number.isFinite(new Date(plannedDate + "T12:00:00").getTime()) || !Number.isInteger(minutes) || minutes < 10 || minutes > 300) {
       actions.notify(t(lang, "请填写有效日期和 10–300 的整数分钟数。", "Enter a valid date and a whole number of minutes from 10 to 300."));
       return;
@@ -468,13 +493,14 @@ export function PlanView({ data, actions }: Props) {
     try {
       await actions.upsert("study_tasks", "tasks", task);
       setTitle((current) => current.trim() === task.title ? "" : current);
-    } catch {
-      /* Workspace displays errors. */
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : t(lang,"任务未保存，输入已保留","Task not saved; input retained"));
     } finally { taskLock.current = false; setSavingTask(null); }
   }
 
   return (
     <div className="page-stack">
+      {planError && <div className="learning-message error-message" role="alert">{planError}<div className="button-row"><button className="text-link" onClick={()=>actions.setView("today")}>{t(lang,"返回今天","Return to Today")}</button><button className="text-link" onClick={()=>actions.setView("library")}>{t(lang,"选择其他资料","Choose another material")}</button></div></div>}
       <div className="page-intro">
         <div>
           <span className="eyebrow">WEEKLY PLAN</span>
@@ -561,27 +587,7 @@ export function PlanView({ data, actions }: Props) {
                     <button
                       className="icon-button subtle"
                       title={t(lang, "开始", "Start")}
-                      onClick={() =>
-                        task.question_id && !task.review_attempt_id
-                          ? actions.notify(
-                              t(
-                                lang,
-                                "原练习已删除，无法继续此题复盘。",
-                                "Original attempt deleted; this review is unavailable.",
-                              ),
-                            )
-                          : task.review_attempt_id
-                            ? actions.openReview(
-                                task.review_attempt_id,
-                                task.question_id ?? undefined,
-                              )
-                            : task.skill === "vocabulary"
-                              ? actions.setView("vocabulary")
-                              : actions.openPractice(
-                                  task.material_id,
-                                  task.skill,
-                                )
-                      }
+                      onClick={() => startTask(task)}
                     >
                       <ArrowRight size={18} />
                     </button>
@@ -1731,6 +1737,7 @@ function LibraryBigIcon() {
 
 export function ProgressView({ data, actions }: Props) {
   const lang = data.profile.language;
+  const [reviewEntryError,setReviewEntryError]=useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected =
     data.attempts.find((attempt) => attempt.id === selectedId) ?? null;
@@ -1760,11 +1767,12 @@ export function ProgressView({ data, actions }: Props) {
           a.id === actions.reviewTarget!.attemptId &&
           a.owner_id === data.profile.id,
       );
-      if (row) {
+      if (row && !row.purged_at) {
+        setReviewEntryError("");
         setSelectedId(row.id);
         setReviewDirty(false);
       } else
-        actions.notify(
+        setReviewEntryError(
           t(
             lang,
             "这条复盘记录已删除或不可访问",
@@ -1886,6 +1894,7 @@ export function ProgressView({ data, actions }: Props) {
 
   return (
     <div className="page-stack">
+      {reviewEntryError && <div className="learning-message error-message" role="alert">{reviewEntryError}<button className="text-link" onClick={()=>{setReviewEntryError("");actions.clearReviewTarget();actions.setView("today");}}>{t(lang,"返回今天","Return to Today")}</button></div>}
       <div className="page-intro">
         <div>
           <span className="eyebrow">PERSONAL INSIGHTS</span>

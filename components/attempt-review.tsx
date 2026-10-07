@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "@/lib/supabase";
+import { apiFetch, ApiError } from "@/lib/supabase";
+import { nextCalendarDate } from "@/lib/learning-flow";
 import {
   evidenceText,
   kindLabel,
@@ -8,8 +9,10 @@ import {
   type AttemptReview,
 } from "@/lib/review";
 import { isCorrectAnswer, isGradableQuestion, localDate, startOfWeek } from "@/lib/study";
-import type { Attempt, Question, WorkspaceData } from "@/lib/types";
+import type { Attempt, Question, WorkspaceData, VocabularyWord, StudyTask } from "@/lib/types";
+import type { VocabularySource, ReviewNote } from "@/lib/review";
 import type { ViewActions } from "./views";
+import { InlineMessage } from "./learning-ui";
 import { t } from "./workspace";
 export function AttemptReviewPanel({
   attempt,
@@ -36,6 +39,7 @@ export function AttemptReviewPanel({
     if (!dirtyIds.length) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
+      e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
@@ -66,7 +70,7 @@ export function AttemptReviewPanel({
   );
   const questions = review.snapshot.questions.filter(
     (q) =>
-      filter === "all" || wrong.includes(q) || review.flagged.includes(q.id),
+      filter === "all" || wrong.includes(q) || review.flagged.includes(q.id) || !isGradableQuestion(q),
   );
   return (
     <section className="review-workbench">
@@ -77,6 +81,7 @@ export function AttemptReviewPanel({
             {kindLabel(attempt.learning_kind, lang)} ·{" "}
             {Math.ceil(attempt.duration_seconds / 60)} min · {wrong.length}{" "}
             {t(lang, "道错题", "incorrect")}
+            {review.snapshot.questions.some(q=>!isGradableQuestion(q)) && <> · {review.snapshot.questions.filter(q=>!isGradableQuestion(q)).length} {t(lang,"题未判分或待核验","unscored or pending verification")}</>}
           </p>
         </div>
         <div className="segmented">
@@ -167,28 +172,40 @@ function QuestionReview({
   const saved = review.notes[q.id];
   const [reason, setReason] = useState(saved?.reason ?? ""),
     [note, setNote] = useState(saved?.note ?? "");
+  const [baseline, setBaseline] = useState<ReviewNote>({ reason: saved?.reason ?? "", note: saved?.note ?? "" });
+  const [conflict, setConflict] = useState<AttemptReview | null>(null);
   const [term, setTerm] = useState(""),
     [definition, setDefinition] = useState(""),
     [mergeId, setMergeId] = useState("");
+  const [remoteWords, setRemoteWords] = useState<VocabularyWord[]>([]);
+  const [savedWord, setSavedWord] = useState("");
   const [date, setDate] = useState(
-      localDate(new Date(Date.now() + 86400000), data.profile.timezone),
+      nextCalendarDate(localDate(new Date(), data.profile.timezone)),
     ),
     [minutes, setMinutes] = useState(10);
+  const [scheduleBaseline, setScheduleBaseline] = useState({ date, minutes });
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
   const lock = useRef(false);
   const [audio, setAudio] = useState<string | null>(null);
   const dirty =
-    reason !== (saved?.reason ?? "") || note !== (saved?.note ?? "");
+    reason !== baseline.reason || note !== baseline.note;
+  useEffect(() => {
+    const latest = { reason: saved?.reason ?? "", note: saved?.note ?? "" };
+    if (latest.reason === baseline.reason && latest.note === baseline.note) return;
+    if (dirty) setConflict(review);
+    else { setReason(latest.reason); setNote(latest.note); setBaseline(latest); }
+  }, [saved?.reason, saved?.note, review, baseline, dirty]);
   const dirtyCallback = useRef(onDirty);
   dirtyCallback.current = onDirty;
   useEffect(() => {
-    dirtyCallback.current(dirty);
-  }, [dirty]);
+    dirtyCallback.current(dirty || !!term || !!definition || date !== scheduleBaseline.date || minutes !== scheduleBaseline.minutes);
+  }, [dirty, term, definition, date, minutes, scheduleBaseline]);
   const context = evidenceText(q, review.snapshot),
     position =
       review.snapshot.questions.findIndex((item) => item.id === q.id) + 1;
-  const duplicates = data.words.filter(
+  const duplicates = [...new Map([...data.words, ...remoteWords].map(word => [word.id, word])).values()].filter(
     (w) => normalizeTerm(w.term) === normalizeTerm(term),
   );
   const source = data.materials.find((m) => m.id === review.snapshot.id);
@@ -199,36 +216,62 @@ function QuestionReview({
     lock.current = true;
     setBusy(true);
     setMessage("");
+    setMessageError(false);
     try {
       await action();
     } catch (e) {
+      setMessageError(true);
       setMessage(e instanceof Error ? e.message : "保存失败 / Save failed");
     } finally {
       lock.current = false;
       setBusy(false);
     }
   }
-  async function saveNote() {
+  async function saveNote(version = review.version) {
+    const submitted = { reason, note };
+    let authoritative: AttemptReview;
     if (!actions.client) {
-      await actions.upsert("attempt_reviews", "attemptReviews", {
+      authoritative = {
         ...review, notes: {...review.notes, [q.id]: {reason, note}},
         version: review.version + 1, updated_at: new Date().toISOString(),
-      });
-    } else await apiFetch(actions.client, "/api/reviews", {
+      };
+      await actions.upsert("attempt_reviews", "attemptReviews", authoritative);
+    } else {
+      try {
+        const response = await apiFetch(actions.client, "/api/reviews", {
       method: "POST",
       body: JSON.stringify({
         action: "note",
         id: review.id,
         questionId: q.id,
-        version: review.version,
+        version,
         reason,
         note,
       }),
-    });
-    await actions.refresh();
+        }) as { review: AttemptReview };
+        authoritative = response.review;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          const latest = error.body.review as AttemptReview | undefined;
+          if (latest?.id === review.id && latest.owner_id === data.profile.id) setConflict(latest);
+        }
+        throw error;
+      }
+    }
+    setBaseline(submitted);
+    setConflict(null);
+    actions.acceptReview?.(authoritative);
     setMessage(t(lang, "错因与备注已保存", "Reason and note saved"));
   }
   async function addWord() {
+    if (actions.client && !mergeId) {
+      const result = await apiFetch(actions.client, `/api/reviews?term=${encodeURIComponent(term.trim())}`) as { words: VocabularyWord[] };
+      if (result.words.length) {
+        setRemoteWords(result.words);
+        setMessage(t(lang, "词表中已有同名词，请选择合并词条后再次保存。", "Matching words exist. Choose an entry to merge, then save again."));
+        return;
+      }
+    }
     if (duplicates.length && !mergeId) {
       setMessage(
         t(
@@ -263,7 +306,8 @@ function QuestionReview({
           id: crypto.randomUUID(), owner_id: data.profile.id, word_id: wordId,
           attempt_id: review.id, question_id: q.id, context: context || q.prompt, created_at: now,
         });
-    } else await apiFetch(actions.client, "/api/reviews", {
+    } else {
+      const response = await apiFetch(actions.client, "/api/reviews", {
       method: "POST",
       body: JSON.stringify({
         action: "word",
@@ -273,8 +317,15 @@ function QuestionReview({
         definition,
         mergeId: duplicates.length ? mergeId : null,
       }),
-    });
-    await actions.refresh();
+      }) as { word?: VocabularyWord; source?: VocabularySource; added?: boolean; refreshRequired?: boolean };
+      if (response.word) actions.acceptWord?.(response.word, { newlyAdded: response.added });
+      if (response.source) actions.acceptVocabularySource?.(response.source);
+      if (response.refreshRequired) {
+        setMessage(t(lang, "词汇已保存，详情暂未加载，请刷新词表确认。不要重复添加。", "Word saved; details unavailable. Refresh your word list rather than adding again."));
+        return;
+      }
+    }
+    setSavedWord(term.trim());
     setTerm("");
     setDefinition("");
     setMergeId("");
@@ -299,7 +350,8 @@ function QuestionReview({
           created_at: new Date().toISOString(),
         });
       }
-    } else await apiFetch(actions.client, "/api/reviews", {
+    } else {
+      const response = await apiFetch(actions.client, "/api/reviews", {
       method: "POST",
       body: JSON.stringify({
         action: "schedule",
@@ -308,8 +360,14 @@ function QuestionReview({
         date,
         minutes,
       }),
-    });
-    await actions.refresh();
+      }) as { task?: StudyTask; refreshRequired?: boolean };
+      if (response.task) actions.acceptTask?.(response.task);
+      if (response.refreshRequired) {
+        setMessage(t(lang, "任务已保存，详情暂未加载，请到计划查看。", "Task saved; check Plan for its details."));
+        return;
+      }
+    }
+    setScheduleBaseline({ date, minutes });
     setMessage(
       t(
         lang,
@@ -335,6 +393,7 @@ function QuestionReview({
     ["unanswered", "漏答", "Unanswered"],
     ["other", "其他", "Other"],
   ];
+  const scheduled = data.tasks.find(task => task.owner_id === data.profile.id && task.review_attempt_id === review.id && task.question_id === q.id && task.status === "todo");
   return (
     <article className="question-review" id={`review-${attempt.id}-${q.id}`}>
       <div className="card-top">
@@ -352,18 +411,6 @@ function QuestionReview({
             : ""}
         </span>
       </div>
-      <dl className="review-answers">
-        <div>
-          <dt>{t(lang, "你的答案", "Your answer")}</dt>
-          <dd>
-            {attempt.answer_body?.[q.id] || t(lang, "未作答", "Unanswered")}
-          </dd>
-        </div>
-        <div>
-          <dt>{t(lang, "可接受答案", "Accepted answers")}</dt>
-          <dd>{q.answers.join(" / ")}</dd>
-        </div>
-      </dl>
       <p>
         {q.explanation ||
           t(lang, "这道题尚未填写解析", "No explanation supplied")}
@@ -394,6 +441,7 @@ function QuestionReview({
         <summary>
           {t(lang, "查看当时的原文 / 文字稿", "Original passage / transcript")}
         </summary>
+        {savedWord && <p role="status">✓ {savedWord} · {t(lang,"已关联此题原文证据","Linked to this question's evidence")} <button className="text-link" onClick={()=> (actions.openVocabularyReview ?? (()=>actions.setView("vocabulary")))()}>{t(lang,"查看词卡","View word cards")}</button></p>}
         <div className="snapshot-original">
           {(review.snapshot.skill === "reading"
             ? review.snapshot.passage
@@ -447,6 +495,19 @@ function QuestionReview({
             )}
           </div>
         )}
+      <dl className="review-answers">
+        <div>
+          <dt>{t(lang, "你的答案", "Your answer")}</dt>
+          <dd>
+            {attempt.answer_body?.[q.id] || t(lang, "未作答", "Unanswered")}
+          </dd>
+        </div>
+        <div>
+          <dt>{t(lang, "可接受答案", "Accepted answers")}</dt>
+          <dd>{q.answers.join(" / ") || t(lang,"尚无参考答案，请先核对原题证据","No reference answer yet; check the source evidence")}</dd>
+        </div>
+      </dl>
+
       <div className="form-grid review-note">
         <label>
           {t(lang, "我认为的错因", "My error reason")}
@@ -477,8 +538,8 @@ function QuestionReview({
       <div className="button-row">
         <button
           className="button secondary small"
-          disabled={busy || !dirty}
-          onClick={() => void run(saveNote)}
+          disabled={busy || !dirty || !!conflict}
+          onClick={() => void run(() => saveNote())}
         >
           {t(lang, "保存错因与备注", "Save reason & note")}
         </button>
@@ -506,10 +567,26 @@ function QuestionReview({
           {t(lang, "刷新云端版本", "Refresh cloud version")}
         </button>
       </div>
+      {conflict && <section className="inline-conflict" role="alert">
+        <strong>{t(lang, "另一页面已修改这道题，当前输入已保留", "This question changed elsewhere. Your input is retained")}</strong>
+        <p>{t(lang, "最新备注", "Latest note")}: {conflict.notes[q.id]?.note || t(lang, "空", "Empty")}</p>
+        <p>{t(lang, "最新错因", "Latest reason")}: {conflict.notes[q.id]?.reason || "—"}</p>
+        <div className="button-row">
+          <button className="button secondary" disabled={busy} onClick={() => {
+            const latest = conflict.notes[q.id] ?? { reason: "", note: "" };
+            setReason(latest.reason); setNote(latest.note); setBaseline(latest);
+            actions.acceptReview?.(conflict); setConflict(null);
+          }}>{t(lang, "采用最新内容", "Use latest content")}</button>
+          <button className="button primary" disabled={busy} onClick={() => {
+            if (window.confirm(t(lang, "确认用当前输入替换这道题的最新备注？", "Replace the latest note for this question with your input?"))) void run(() => saveNote(conflict.version));
+          }}>{t(lang, "保留我的输入并保存", "Save my input")}</button>
+        </div>
+      </section>}
       <details className="review-next">
         <summary>
           {t(lang, "下一步：词汇与复习", "Next: vocabulary & review")}
         </summary>
+        {scheduled && <p role="status">{t(lang, "✓ 已安排复习", "✓ Review scheduled")} · {scheduled.planned_date} <button className="text-link" onClick={() => actions.setView("plan")}>{t(lang, "查看计划或改期", "View Plan or reschedule")}</button></p>}
         <form
           className="form-stack"
           onSubmit={(e) => {
@@ -624,18 +701,14 @@ function QuestionReview({
           </label>
           <button
             className="button secondary small"
-            disabled={busy || !date}
+            disabled={busy || !date || !!scheduled}
             onClick={() => void run(schedule)}
           >
             {t(lang, "安排此题复盘", "Schedule this question")}
           </button>
         </div>
       </details>
-      {message && (
-        <p role="status" className="review-message">
-          {message}
-        </p>
-      )}
+      {message && <InlineMessage error={messageError}>{message}</InlineMessage>}
     </article>
   );
 }

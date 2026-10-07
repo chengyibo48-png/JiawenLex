@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, BookOpen, Headphones, PenLine, Mic, GraduationCa
 import type { WorkspaceData, VocabularyWord } from "@/lib/types";
 import type { ViewActions } from "./views";
 import { apiFetch } from "@/lib/supabase";
+import { LoadingState } from "./learning-ui";
 import { WordMemory } from "./word-memory";
 import { t } from "./workspace";
 const WordAchievements = dynamic(() => import("./word-achievements").then(module => module.WordAchievements), { loading: () => <section className="card" role="status">正在打开成就闪卡… / Loading achievements…</section> });
@@ -53,6 +54,7 @@ export function VocabularyCollections({data,actions,manager}:{data:WorkspaceData
   finally{if(token===generation.current){lock.current=false;setBusy(false);}}
  }
  function choose(id:string,search=query.trim()){setPanel(null);setAppliedQuery(search);active.current=id;setSelected(id);setWords([]);setCursor(null);setMore(false);void load(id,false,search);}
+ useEffect(()=>{if(actions.vocabularyReviewRequest)choose("all","");},[actions.vocabularyReviewRequest]);
  function back(){generation.current++;lock.current=false;active.current=null;setBusy(false);setError("");setSelected(null);setFailedRequest(null);void loadCounts().catch(e=>setError(e.message));}
  const localActions:ViewActions={...actions,
   acceptWord:word=>{setAchievementRevision(value=>value+1);edits.current.set(word.id,word);setWords(previous=>previous.map(w=>w.id===word.id?word:w).filter(w=>active.current!=="favorites"||w.tags.includes("收藏")));actions.acceptWord?.(word);},
@@ -72,7 +74,7 @@ export function VocabularyCollections({data,actions,manager}:{data:WorkspaceData
  {error&&<div className="card" role="alert"><p>{error}</p><button className="button secondary" onClick={()=>void loadCounts().then(()=>setError("")).catch(e=>setError(e.message))}>{t(lang,"重试","Retry")}</button></div>}</>:<>
  <div className="collection-topbar"><button className="button secondary" onClick={back}><ArrowLeft size={18}/>{t(lang,"词卡分类","Collections")}</button><strong>{category&&t(lang,category.zh,category.en)}</strong><button className="text-link" disabled={busy} onClick={()=>void load(selected)}>{t(lang,"刷新分类","Refresh collection")}</button><span className="muted">{t(lang,`已加载 ${words.length} 张`,`${words.length} loaded`)}{appliedQuery&&` · ${appliedQuery}`}</span></div>
  {error&&<p role="alert">{error}<button className="button secondary" onClick={()=>{if(failedRequest)void load(failedRequest.id,failedRequest.append,failedRequest.search);else void load(selected);}}>{t(lang,"重试","Retry")}</button></p>}
- {!busy&&error&&!words.length?<section className="card empty-state"><p>{t(lang,"词卡尚未载入，请重试或返回分类。","Cards have not loaded. Retry or return to collections.")}</p></section>:busy&&!words.length?<section className="card" role="status">{t(lang,"正在加载这一类词卡…","Loading this collection…")}</section>:<WordMemory key={selected} data={localData} actions={localActions} manager={more?<p className="muted">{t(lang,"词表按批加载；加载完整分类后可管理词表。","Load the complete collection to manage its list.")}</p>:manager(localData,localActions)}/>}
+ {!busy&&error&&!words.length?<section className="card empty-state"><p>{t(lang,"词卡尚未载入，请重试或返回分类。","Cards have not loaded. Retry or return to collections.")}</p></section>:busy&&!words.length?<LoadingState label={t(lang,"正在加载这一类词卡…","Loading this collection…")}/>:<WordMemory key={selected} data={localData} actions={localActions} manager={more?<p className="muted">{t(lang,"词表按批加载；加载完整分类后可管理词表。","Load the complete collection to manage its list.")}</p>:manager(localData,localActions)}/>}
  {more&&<section className="card collection-more"><p>{t(lang,"当前仅展示已加载的词卡；还有更多可继续学习。","Only loaded cards are shown. More cards are available.")}</p><button disabled={busy} className="button primary" onClick={()=>void load(selected,true)}>{t(lang,busy?"正在加载…":"再加载 250 张",busy?"Loading…":"Load 250 more")}</button></section>}
  </>}
  </>}

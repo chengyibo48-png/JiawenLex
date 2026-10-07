@@ -8,20 +8,28 @@ import { sessionHasStarted, type PracticeSessionState } from "@/lib/practice-ses
 import { apiFetch } from "@/lib/supabase";
 import { hasQuestionAnswer, questionNumber as displayedQuestionNumber } from "@/lib/question-progress";
 import { QuestionNavigation } from "./question-navigation";
+import { ListeningPlayer } from "./listening-player";
 import { Modal } from "./modal";
 import { t } from "./workspace";
 
 export function QuestionPractice({ material, lang, state, answers, revealed, finished, busy, locked, ready,
-  mobilePane, audioUrl, onAudioStatus, figureUrl, transcriptOpen, expired, client, notify, onPane, onTranscript, onAnswer, onState, onReveal, onSubmit }: {
+  mobilePane, audioUrl, onAudioStatus, onAudioRetry, figureUrl, transcriptOpen, expired, client, notify, onPane, onTranscript, onAnswer, onState, onReveal, onSubmit }: {
   material: Material; lang: Language; state: PracticeSessionState; answers: Record<string, string>;
   revealed: string[]; finished: boolean; busy: boolean; locked: boolean; ready: boolean;
   mobilePane: "passage" | "questions"; audioUrl: string | null; figureUrl: string | null; transcriptOpen: boolean; expired: boolean;
   onAudioStatus?: (ready: boolean) => void;
+  onAudioRetry?: () => void;
   client: SupabaseClient | null; notify: (message: string) => void;
   onPane: (pane: "passage" | "questions") => void; onTranscript: () => void;
   onAnswer: (id: string, answer: string) => void; onState: (patch: Partial<PracticeSessionState>) => void;
   onReveal: (id: string) => void; onSubmit: () => void;
 }) {
+  const paneOffsets = useRef({ passage: 0, questions: 0 });
+  function switchPane(pane: "passage" | "questions") {
+    paneOffsets.current[mobilePane] = window.scrollY;
+    onPane(pane);
+    requestAnimationFrame(() => window.scrollTo({ top: paneOffsets.current[pane], behavior: "instant" }));
+  }
   const refs = useRef(new Map<string, HTMLDivElement>());
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [reportQuestion, setReportQuestion] = useState<Question | null>(null);
@@ -99,10 +107,10 @@ export function QuestionPractice({ material, lang, state, answers, revealed, fin
   }
   return <>
     <QuestionNavigation questions={questions} answers={answers} flagged={state.flagged} current={state.currentQuestionId} lang={lang} onJump={jump} />
-    <div className="mobile-pane-tabs"><button className={mobilePane === "passage" ? "active" : ""} onClick={() => onPane("passage")}>{t(lang, material.skill === "reading" ? "文章" : "音频与文字稿", material.skill === "reading" ? "Passage" : "Audio & transcript")}</button><button className={mobilePane === "questions" ? "active" : ""} onClick={() => onPane("questions")}>{t(lang, "题目", "Questions")}</button></div>
+    <div className="mobile-pane-tabs"><button className={mobilePane === "passage" ? "active" : ""} onClick={() => switchPane("passage")}>{t(lang, material.skill === "reading" ? "文章" : "音频与文字稿", material.skill === "reading" ? "Passage" : "Audio & transcript")}</button><button className={mobilePane === "questions" ? "active" : ""} onClick={() => switchPane("questions")}>{t(lang, "题目", "Questions")}</button></div>
     <div className="reading-grid">
       <section className={`card passage-pane mobile-${mobilePane}`} aria-label={t(lang, "阅读材料或听力文字稿", "Passage or transcript")}>
-        {material.skill === "listening" && !material.tags.includes("listening-text") && <>{audioUrl ? <audio key={audioUrl} controls src={audioUrl} onLoadedMetadata={()=>onAudioStatus?.(true)} onError={()=>onAudioStatus?.(false)} preload="metadata" className="audio-player" /> : <div className="audio-empty"><FileAudio size={20} />{t(lang, "这组听力还没有音频附件", "This set has no audio attachment")}</div>}<button className="text-action" disabled={!material.transcript.trim() || (state.mode === "timed" && !finished)} onClick={onTranscript}>{transcriptOpen ? t(lang, "隐藏文字稿", "Hide transcript") : t(lang, "显示文字稿", "Show transcript")}<ChevronRight size={16} /></button>{!material.transcript.trim()&&<p className="muted small">{t(lang,"尚无核验过的文字稿，请依据配套录音作答。","No reviewed transcript is available. Answer from the supplied recording.")}</p>}{state.mode === "timed" && !finished && <p className="muted small">{t(lang, "计时练习提交后开放文字稿。", "The transcript unlocks after timed practice is submitted.")}</p>}</>}
+        {material.skill === "listening" && !material.tags.includes("listening-text") && <>{audioUrl ? <ListeningPlayer src={audioUrl} language={lang} onStatus={onAudioStatus} onRetry={onAudioRetry}/> : <div className="audio-empty"><FileAudio size={20} />{t(lang, "这组听力还没有音频附件", "This set has no audio attachment")}</div>}<button className="text-action" disabled={!material.transcript.trim() || (state.mode === "timed" && !finished)} onClick={onTranscript}>{transcriptOpen ? t(lang, "隐藏文字稿", "Hide transcript") : t(lang, "显示文字稿", "Show transcript")}<ChevronRight size={16} /></button>{!material.transcript.trim()&&<p className="muted small">{t(lang,"尚无核验过的文字稿，请依据配套录音作答。","No reviewed transcript is available. Answer from the supplied recording.")}</p>}{state.mode === "timed" && !finished && <p className="muted small">{t(lang, "计时练习提交后开放文字稿。", "The transcript unlocks after timed practice is submitted.")}</p>}</>}
         {material.tags.includes("listening-text") && <p className="notice info">{t(lang, "听力词汇文本训练 · 无配套音频，不是完整听力测试，成绩不计入听力正确率趋势。", "Listening vocabulary text practice · no audio. This is not a full listening test and does not affect listening accuracy trends.")}</p>}
         {(material.skill === "reading" || transcriptOpen || material.tags.includes("listening-text")) && <div className="passage-text">{(material.skill === "reading" ? material.passage : material.transcript).split("\n").map((p, i) => <p key={i}>{p}</p>)}</div>}
         {figureUrl && <img className="question-figure" src={figureUrl} alt={t(lang, "练习辅助图表", "Supporting figure for this exercise")} />}

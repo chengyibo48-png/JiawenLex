@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadWorkspace, loadVocabulary } from '../lib/supabase.ts';
+import { registerHooks } from 'node:module';
+registerHooks({ resolve(specifier, context, next) {
+  try { return next(specifier, context); } catch (error) {
+    if (specifier.startsWith('./') && context.parentURL?.includes('/lib/') && !specifier.endsWith('.ts')) return next(specifier + '.ts', context);
+    throw error;
+  }
+} });
+const { loadWorkspace, loadVocabulary } = await import('../lib/supabase.ts');
 
 function fixture({size = 2100, cap = 1000, counts = true, failCount = false} = {}) {
   const calls = [];

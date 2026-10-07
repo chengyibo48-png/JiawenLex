@@ -18,7 +18,8 @@ export function Modal({ label, busy = false, onClose, children }: {
     openModals += 1;
     document.body.style.overflow = "hidden";
     dialog.showModal();
-    dialog.querySelector<HTMLElement>("[data-modal-initial-focus]")?.focus();
+    const initial = dialog.querySelector<HTMLElement>("[data-modal-initial-focus]") ?? dialog.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled), select:not(:disabled)");
+    (initial ?? dialog).focus({ preventScroll: true });
     return () => {
       dialog.close();
       openModals -= 1;

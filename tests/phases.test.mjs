@@ -61,6 +61,29 @@ await t.test('Vocabulary deduplication collapses spaces and case',async()=>{
  await denied(pg,()=>pg.query("select public.add_review_word($1,$2,'q1',' food bank ','食物银行')",[member,attempt]),/duplicate_word_confirmation_required/);
  }finally{await pg.exec('rollback');}
 });
+await t.test('Review merging and repeated scheduling preserve existing word progress and task identity',async()=>{
+ await pg.exec('begin');try{
+  const word=(await pg.query("insert into public.vocabulary(owner_id,term,definition,interval_days,streak) values($1,'Retained word','Original meaning',14,3) returning id",[member])).rows[0].id;
+  await pg.exec('set local role service_role');
+  for(let i=0;i<2;i++) assert.equal((await pg.query("select public.add_review_word($1,$2,'q1','retained word','New meaning',$3) as id",[member,attempt,word])).rows[0].id,word);
+  const saved=(await pg.query('select definition,interval_days,streak from public.vocabulary where id=$1',[word])).rows[0];
+  assert.deepEqual(saved,{definition:'Original meaning',interval_days:14,streak:3});
+  assert.equal((await pg.query('select count(*)::int as n from public.vocabulary_sources where word_id=$1',[word])).rows[0].n,1);
+  const first=(await pg.query("select public.schedule_question_review($1,$2,'q1','2026-11-01',10) as id",[member,attempt])).rows[0].id;
+  const again=(await pg.query("select public.schedule_question_review($1,$2,'q1','2026-11-02',15) as id",[member,attempt])).rows[0].id;
+  assert.equal(again,first);
+  assert.equal((await pg.query('select planned_date::text as day from public.study_tasks where id=$1',[first])).rows[0].day,'2026-11-01');
+  await denied(pg,()=>pg.query("select public.schedule_question_review($1,$2,'missing','2026-11-01',10)",[member,attempt]),/Question unavailable/);
+ }finally{await pg.exec('rollback');}
+});
+await t.test('Review note compare-and-swap prevents stale versions from overwriting data',async()=>{
+ await pg.exec('begin');try{
+  const first=await pg.query("update public.attempt_reviews set notes='{\"q1\":{\"reason\":\"meaning\",\"note\":\"Other page\"}}',version=2 where id=$1 and owner_id=$2 and version=1 returning id",[attempt,member]);
+  assert.equal(first.rows.length,1);
+  assert.equal((await pg.query("update public.attempt_reviews set notes='{}',version=2 where id=$1 and owner_id=$2 and version=1 returning id",[attempt,member])).rows.length,0);
+  assert.equal((await pg.query('select notes from public.attempt_reviews where id=$1',[attempt])).rows[0].notes.q1.note,'Other page');
+ }finally{await pg.exec('rollback');}
+});
 await t.test('Admin cannot read member private review or resume state',async()=>{
  await pg.query("insert into public.practice_sessions(owner_id,material_id,skill,state) values($1,$2,'reading','{}')",[member,material]);
  await pg.query("insert into public.micro_sessions(owner_id,material_id,body) values($1,'original:one','{}')",[member]);

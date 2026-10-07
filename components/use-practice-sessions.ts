@@ -17,6 +17,7 @@ interface Options {
 export function usePracticeSessions(options: Options) {
   const latest = useRef(options); latest.current = options;
   const entries = useRef(new Map<string, Entry>());
+  const operationLocks = useRef(new Set<string>());
   const owner = useRef<string | null>(null);
   const retainedCopies = useRef(new Map<string, LocalDraft[]>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -29,7 +30,7 @@ export function usePracticeSessions(options: Options) {
   const allowed = (id: string) => latest.current.materials.some((m) => m.id === id);
   function persist(entry: Entry) {
     const snapshot = { ...entry.row };
-    const write = saveLocalDraft(entry.row.owner_id, sessionLocalId(entry.row.material_id), JSON.stringify(snapshot), snapshot.version);
+    const write = entry.write.catch(() => undefined).then(() => saveLocalDraft(snapshot.owner_id, sessionLocalId(snapshot.material_id), JSON.stringify(snapshot), snapshot.version));
     entry.write = write;
     void write.then((local) => { entry.revision = local.revision; }).catch(() => { entry.status = "error"; touch(); });
     return write;
@@ -186,6 +187,9 @@ export function usePracticeSessions(options: Options) {
     touch();
   }
   async function resolve(materialId: string, choice: "cloud" | "local") {
+    if (operationLocks.current.has(materialId)) throw new Error("操作正在进行 / Operation in progress");
+    operationLocks.current.add(materialId);
+    try {
     const entry = entries.current.get(materialId);
     if (!entry?.conflict) return;
     const cloud = entry.conflict.cloud;
@@ -201,12 +205,18 @@ export function usePracticeSessions(options: Options) {
       await persist(entry); await flushEntry(entry);
     }
     touch();
+    } finally { operationLocks.current.delete(materialId); }
   }
   async function restart(material: Material) {
+    if (operationLocks.current.has(material.id)) throw new Error("操作正在进行 / Operation in progress");
+    operationLocks.current.add(material.id);
+    try {
     const entry = entries.current.get(material.id);
     if (entry?.conflict) throw new Error("请先处理会话冲突 / Resolve the session conflict first");
     if (entry) await archive(entry, entry.row);
     update(material, initialSessionState(material));
+    await entries.current.get(material.id)?.write;
+    } finally { operationLocks.current.delete(material.id); }
   }
   async function complete(material: Material) {
     const entry = entries.current.get(material.id);
@@ -227,12 +237,24 @@ export function usePracticeSessions(options: Options) {
     copies: (id: string) => entries.current.get(id)?.copies ?? retainedCopies.current.get(id) ?? [],
     update, resolve, restart, complete,
     restore: async (material: Material, state: PracticeSessionState) => {
+      if (operationLocks.current.has(material.id)) throw new Error("操作正在进行 / Operation in progress");
+      operationLocks.current.add(material.id);
+      try {
       const entry = entries.current.get(material.id);
       if (entry?.conflict) throw new Error("Resolve the conflict first");
       if (entry) await archive(entry, entry.row);
       update(material, { ...state, phase: "active" });
+      await entries.current.get(material.id)?.write;
+      } finally { operationLocks.current.delete(material.id); }
     },
-    flush: async (id: string) => { const entry = entries.current.get(id); if (entry) { if (entry.status === "error") await persist(entry); await entry.write; await flushEntry(entry); } },
+    flush: async (id: string) => {
+      const entry = entries.current.get(id);
+      if (entry) {
+        if (entry.status === "error") await persist(entry);
+        await entry.write; await flushEntry(entry);
+        if (entry.status !== "saved") throw new Error(entry.status === "conflict" ? "版本冲突，作答已保留 / Conflict; answers retained" : entry.status === "error" ? "本机保存失败，请保留页面 / Local saving failed; keep this page open" : "本机暂存成功，云端尚未确认 / Saved locally; cloud not confirmed");
+      }
+    },
     canLeave: async (id: string) => {
       const entry = entries.current.get(id);
       if (!entry) return true;

@@ -8,6 +8,7 @@ import {
   Mic,
   Search,
 } from "lucide-react";
+import { hasLearningActivity } from "@/lib/learning-flow";
 import { answeredCount, estimateMinutes, hasListeningAudio, practiceMaterials } from "@/lib/practice-sessions";
 import { skillLabels, skills } from "@/lib/study";
 import type { Material, Skill, WorkspaceData } from "@/lib/types";
@@ -71,7 +72,7 @@ export function PracticeCatalog({
     }
     return index;
   }, [data.attempts, data.profile.id]);
-  const activeByMaterial = useMemo(() => new Map(actions.sessions.sessions.map(session => [session.material_id, session])), [actions.sessions.sessions]);
+  const activeByMaterial = useMemo(() => new Map(actions.sessions.sessions.filter(hasLearningActivity).map(session => [session.material_id, session])), [actions.sessions.sessions]);
   const latest = (id: string) => latestByMaterial.get(id);
   const active = (id: string) => activeByMaterial.get(id);
   const state = (id: string) =>
@@ -148,6 +149,7 @@ export function PracticeCatalog({
         ))}
       </div>
       <p className="notice info">{t(lang,({reading:"阅读题保留完整文章；填空、选择与判断按原答案核对。",listening:"这里只展示配套录音的听力题。无录音资料仍保留在资料库和词汇模块。",writing:"按 Task 1 / Task 2 选择；参考范文用于学习，作文不按唯一答案判错。",speaking:"按 Part 1 / Part 2 / Part 3 选择；可录音或填写回答，参考表达不作为唯一答案。"})[skill],({reading:"Read the full passage and answer by question type.",listening:"Only listening sets with recordings appear here. Text-only content remains in the library and vocabulary module.",writing:"Choose Task 1 or Task 2. Sample responses are references, not unique answers.",speaking:"Choose Part 1, 2 or 3. Record or type a response; samples are not unique answers."})[skill])}</p>
+      {(search || type || tag || origin || collection || status !== "all") && <button className="button secondary" onClick={reset}>{t(lang,"清除全部筛选","Clear all filters")}</button>}
       <div className="catalog-toolbar">
         <label className="search-field">
           <Search size={16} />
@@ -280,7 +282,7 @@ export function PracticeCatalog({
                     </span>
                   </span>
                   <small>
-                    {material.question_type ||
+                    {t(lang,skillLabels[material.skill].zh,skillLabels[material.skill].en)} · {material.questions.length > 0 && material.questions.every(q => q.verified) ? t(lang,"✓ 原资料已核验","✓ Source verified") : t(lang,"待核验","Verification pending")} · {material.skill === "listening" ? (hasListeningAudio(material) ? t(lang,"音频可用","Audio available") : t(lang,"无音频","No audio")) : t(lang,"文本作答","Text response")} · {material.question_type ||
                       t(lang, "单项练习", "Skill practice")}{" "}
                     ·{" "}
                     {material.questions.length
@@ -350,7 +352,7 @@ export function PracticeCatalog({
                     </span>
                   </span>
                   <small>
-                    {material.question_type ||
+                    {t(lang,skillLabels[material.skill].zh,skillLabels[material.skill].en)} · {material.questions.length > 0 && material.questions.every(q => q.verified) ? t(lang,"✓ 原资料已核验","✓ Source verified") : t(lang,"待核验","Verification pending")} · {material.skill === "listening" ? (hasListeningAudio(material) ? t(lang,"音频可用","Audio available") : t(lang,"无音频","No audio")) : t(lang,"文本作答","Text response")} · {material.question_type ||
                       t(lang, "单项练习", "Skill practice")}{" "}
                     ·{" "}
                     {material.questions.length

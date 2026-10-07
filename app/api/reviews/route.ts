@@ -1,7 +1,27 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, HttpError, requireUser } from "@/lib/server-auth";
-import type { AttemptReview } from "@/lib/review";
+import { normalizeTerm, type AttemptReview } from "@/lib/review";
+export async function GET(request: Request) {
+  try {
+    const { userId, admin } = await requireUser(request);
+    const term = z.string().trim().min(1).max(160).parse(new URL(request.url).searchParams.get("term"));
+    const pattern = "%" + term.split(/\s+/).map(part => part.replace(/[\\%_]/g, char => "\\" + char)).join("%") + "%";
+    const matches: Record<string, unknown>[] = [];
+    let cursor: string | undefined;
+    do {
+      let query = admin.from("vocabulary").select("*").eq("owner_id", userId).ilike("term", pattern).order("id").limit(500);
+      if (cursor) query = query.gt("id", cursor);
+      const result = await query;
+      if (result.error) throw result.error;
+      const page = result.data ?? [];
+      matches.push(...page.filter(word => normalizeTerm(word.term) === normalizeTerm(term)));
+      if (page.length < 500 || matches.length >= 100) break;
+      cursor = page.at(-1)?.id;
+    } while (cursor);
+    return NextResponse.json({ words: matches.slice(0,100) }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) { return apiError(error); }
+}
 const Note = z.object({
   action: z.literal("note"),
   id: z.string().uuid(),
@@ -118,11 +138,11 @@ export async function POST(request: Request) {
         .select("*")
         .maybeSingle();
       if (saved.error) throw saved.error;
-      if (!saved.data)
-        throw new HttpError(
-          409,
-          "Review conflict; reload and retry. Input retained.",
-        );
+      if (!saved.data) {
+        const latest = await admin.from("attempt_reviews").select("*").eq("id", input.id).eq("owner_id", userId).maybeSingle();
+        if (latest.error) throw latest.error;
+        return NextResponse.json({ error: "复盘已在其他页面变化，当前输入保留 / Review conflict; input retained", review: latest.data }, { status: 409 });
+      }
       return NextResponse.json({ review: saved.data });
     }
     if (input.action === "word") {
@@ -135,7 +155,14 @@ export async function POST(request: Request) {
         merge_id: input.mergeId,
       });
       if (result.error) throw new HttpError(409, result.error.message);
-      return NextResponse.json({ id: result.data });
+      try {
+        const word = await admin.from("vocabulary").select("*").eq("id", result.data).eq("owner_id", userId).single();
+        const source = await admin.from("vocabulary_sources").select("*").eq("word_id", result.data).eq("owner_id", userId).eq("attempt_id", input.id).eq("question_id", input.questionId).maybeSingle();
+        return NextResponse.json({ id: result.data, word: word.data, source: source.data, added: input.mergeId === null, refreshRequired: !!(word.error || source.error) });
+      } catch {
+        // A transport failure after commit must never be reported as a failed write.
+        return NextResponse.json({ id: result.data, word: null, source: null, added: input.mergeId === null, refreshRequired: true });
+      }
     }
     const date = new Date(input.date + "T12:00:00Z");
     if (
@@ -157,7 +184,10 @@ export async function POST(request: Request) {
           ? "这一周已达到学习时长预算，请改期或先调整未完成任务 / Weekly budget reached; reschedule or adjust pending tasks"
           : result.error.message,
       );
-    return NextResponse.json({ id: result.data });
+    try {
+      const task = await admin.from("study_tasks").select("*").eq("id", result.data).eq("owner_id", userId).single();
+      return NextResponse.json({ id: result.data, task: task.data, refreshRequired: !!task.error });
+    } catch { return NextResponse.json({ id: result.data, task: null, refreshRequired: true }); }
   } catch (error) {
     return apiError(error);
   }

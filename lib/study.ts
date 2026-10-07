@@ -127,6 +127,7 @@ export function withinAnswerWordRule(question: Pick<Question, "word_limit" | "an
 }
 
 export function isCorrectAnswer(question: Question, answer: string): boolean {
+  if (question.verified === false) return false;
   if (question.verification_level === "administrator_approved" || question.answer_mode === "open") return false;
   if (question.answer_mode === "multi_choice") {
     let selected: unknown;
@@ -142,6 +143,7 @@ export function isCorrectAnswer(question: Question, answer: string): boolean {
 }
 
 export function isGradableQuestion(question: Question): boolean {
+  if (question.verified === false) return false;
   if (question.verification_level === "administrator_approved") return false;
   if (question.answer_mode === "open") return false;
   if (question.answer_mode === "multi_choice") return question.answers.some((accepted) => accepted.trim()) && !!question.choices?.length;

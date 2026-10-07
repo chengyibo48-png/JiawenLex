@@ -88,6 +88,7 @@ export function PracticeView({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<string[]>([]);
   const [finished, setFinished] = useState(false);
+  const [submissionNotice, setSubmissionNotice] = useState("");
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioReady,setAudioReady]=useState(false),[audioError,setAudioError]=useState(false),[audioReload,setAudioReload]=useState(0);
@@ -515,6 +516,7 @@ export function PracticeView({
           ? error.message
           : "无法保留副本 / Could not archive copy",
       );
+      throw error;
     }
   }
 
@@ -530,7 +532,7 @@ export function PracticeView({
       actions.client &&
       selected
     ) {
-      await apiFetch(actions.client, "/api/learning", {
+      const response = await apiFetch(actions.client, "/api/learning", {
         method: "POST",
         body: JSON.stringify({
           id: attempt.id,
@@ -543,7 +545,10 @@ export function PracticeView({
           flagged: questionState?.flagged ?? [],
           answerExposed: revealed.length > 0 || !!questionState?.answerExposed,
         }),
-      });
+      }) as { attempt?: Attempt; review?: import("@/lib/review").AttemptReview; refreshRequired?: boolean };
+      if (response.attempt) actions.acceptAttempt?.(response.attempt);
+      if (response.review) actions.acceptReview?.(response.review);
+      if (response.refreshRequired) setSubmissionNotice(t(lang,"练习已提交保存，详情暂未载入。请刷新记录，不要重复提交。","Practice saved; details unavailable. Refresh history rather than submitting again."));
     } else {
       const objective = selected && ["reading", "listening"].includes(attempt.skill);
       const exposed = revealed.length > 0 || !!questionState?.answerExposed ||
@@ -564,8 +569,9 @@ export function PracticeView({
         });
       }
     }
-    await actions.refresh();
     setFinished(true);
+    try { await actions.refresh(); }
+    catch { setSubmissionNotice(t(lang,"练习已保存，列表刷新失败。可以稍后刷新个人记录；当前作答保留。","Practice saved; refreshing the list failed. Refresh history later; your answers are retained.")); }
     actions.notify(
       t(lang, "练习已保存到个人记录", "Practice saved to your history"),
     );
@@ -634,7 +640,9 @@ export function PracticeView({
         );
       setRevealed(selected.questions.map((question) => question.id));
     } catch (error) {
-      actions.notify(error instanceof Error ? error.message : "提交失败");
+      const message = error instanceof Error ? error.message : "提交失败";
+      setSubmissionNotice(message + " " + t(lang,"提交尚未确认，当前作答保留。请核对个人记录后重试。","Submission not confirmed; your answers are retained. Check history before retrying."));
+      actions.notify(message);
     } finally {
       submissionLock.current = false;
       setBusy(false);
@@ -1330,21 +1338,8 @@ export function PracticeView({
                       : undefined,
                   )
                 }
-                onRestart={() => void restartQuestions()}
-                onRestore={(state) => {
-                  void actions.sessions
-                    .restore(selected, state)
-                    .then(() => restoreQuestions(state))
-                    .catch(() =>
-                      actions.notify(
-                        t(
-                          lang,
-                          "恢复失败，当前版本仍保留",
-                          "Restore failed; current version retained",
-                        ),
-                      ),
-                    );
-                }}
+                onRestart={restartQuestions}
+                onRestore={(state) => actions.sessions.restore(selected, state).then(() => restoreQuestions(state))}
               />
               {selected.skill==="listening"&&!audioReady&&<div className="notice info" role="status">{audioError?t(lang,"录音暂时无法加载，答题暂缓开放，已有答案保留。","Recording unavailable. Answers are preserved; retry to continue."):t(lang,"正在加载配套录音…","Loading the recording…")} <button className="button secondary small" onClick={()=>setAudioReload(v=>v+1)}>{t(lang,"重新加载录音","Reload recording")}</button></div>}
               <QuestionPractice
@@ -1360,6 +1355,7 @@ export function PracticeView({
                 locked={!!sessionConflict || !!materialChanged}
                 ready={sessionReady && (selected.skill!=="listening"||audioReady)}
                 onAudioStatus={value=>{setAudioReady(value);if(!value)setAudioError(true);}}
+                onAudioRetry={()=>setAudioReload(value=>value+1)}
                 mobilePane={mobilePane}
                 audioUrl={audioUrl}
                 figureUrl={figureUrl}
@@ -1677,11 +1673,12 @@ export function PracticeView({
                     : actions.setView("progress")
                 }
               >
-                {t(lang, "查看记录", "View history")}
+                {t(lang, selected.skill === "reading" || selected.skill === "listening" ? "进入错题复盘" : "查看反馈与自评", selected.skill === "reading" || selected.skill === "listening" ? "Review answers" : "Feedback & self-assessment")}
                 <ArrowRight size={16} />
-              </button>
+              </button><button className="button secondary" onClick={()=>actions.setView("today")}>{t(lang,"返回今天","Back to Today")}</button>
             </section>
           )}
+          {submissionNotice && <p className="learning-message" role="status">{submissionNotice}</p>}
           {feedbackNotice && <section className="card" role="status"><h3>{t(lang, "AI 反馈未生成", "AI feedback was not generated")}</h3><p>{feedbackNotice}</p><p className="muted small">{t(lang, "请按练习保存状态查看原始作答；在设置中处理服务配置或额度问题。", "Check the practice save status for your original answer. Resolve provider configuration or quota issues in settings.")}</p></section>}
           {feedback && (
             <section className="card ai-feedback">
